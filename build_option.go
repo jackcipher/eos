@@ -1,6 +1,12 @@
-package eoss
+package eos
 
 type BuildOption func(c *Container)
+
+func WithDebug(debug bool) BuildOption {
+	return func(c *Container) {
+		c.config.Debug = debug
+	}
+}
 
 func WithStorageType(storageType string) BuildOption {
 	return func(c *Container) {
@@ -59,11 +65,5 @@ func WithSSL(ssl bool) BuildOption {
 func WithS3HttpTimeoutSecs(s3HttpTimeoutSecs int64) BuildOption {
 	return func(c *Container) {
 		c.config.S3HttpTimeoutSecs = s3HttpTimeoutSecs
-	}
-}
-
-func WithBucketKey(bucketKey string) BuildOption {
-	return func(c *Container) {
-		c.config.bucketKey = bucketKey
 	}
 }

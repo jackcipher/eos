@@ -15,7 +15,7 @@ awos for node: https://github.com/shimohq/awos-js
 Use go get to retrieve the SDK to add it to your GOPATH workspace, or project's Go module dependencies.
 
 ```bash
-go get github.com/ego-component/eoss
+go get github.com/ego-component/eos
 ```
 
 ## How to use
@@ -26,48 +26,43 @@ storageType = "oss" # oss|s3
 accessKeyID = "xxx"
 accessKeySecret = "xxx"
 endpoint = "oss-cn-beijing.aliyuncs.com"
-bucket = "aaa"
+bucket = "aaa" # 定义默认storage实例
 shards = []
-[storage.buckets.template] # 可配置多套buckets配置，buckets里的配置会替换上层配置
-bucket = "template-bucket"
-shards = []
-[storage.buckets.fileContent]
-bucket = "contents-bucket"
-shards = [
- "abcdefghijklmnopqr",
- "stuvwxyz0123456789"
-]
+  # 定义其他storage实例
+  [storage.buckets.template] 
+  bucket = "template-bucket"
+  shards = []
+  [storage.buckets.fileContent]
+  bucket = "contents-bucket"
+  shards = [
+   "abcdefghijklmnopqr",
+   "stuvwxyz0123456789"
+  ]
 ```
 
 ```golang
-import "github.com/ego-component/eoss"
+import "github.com/ego-component/eos"
 
-// 单独一个 bucket 配置
-client := eoss.Load("storage").Build()
-// 多 bucket 配置
-client := eoss.Load("storage").Build(eoss.WithBucketKey("template"))
-
-// 带context（可记录链路）
-client.WithContext(ctx).Get(key)
+// 构建 os component
+cmp := eoss.Load("storage").Build()
 ```
 
 Available operations：
 
 ```golang
-WithContext(ctx context.Context) Component
-Get(key string, options ...GetOptions) (string, error)
-GetBytes(key string, options ...GetOptions) ([]byte, error)
-GetAsReader(key string, options ...GetOptions) (io.ReadCloser, error)
-GetWithMeta(key string, attributes []string, options ...GetOptions) (io.ReadCloser, map[string]string, error)
-Put(key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error
-Del(key string) error
-DelMulti(keys []string) error
-Head(key string, meta []string) (map[string]string, error)
-ListObject(key string, prefix string, marker string, maxKeys int, delimiter string) ([]string, error)
-SignURL(key string, expired int64) (string, error)
-GetAndDecompress(key string) (string, error)
-GetAndDecompressAsReader(key string) (io.ReadCloser, error)
-CompressAndPut(key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error
-Range(key string, offset int64, length int64) (io.ReadCloser, error)
-Exists(key string)(bool, error)
+Get(ctx context.Context, key string, options ...GetOptions) (string, error)
+GetBytes(ctx context.Context, key string, options ...GetOptions) ([]byte, error)
+GetAsReader(ctx context.Context, key string, options ...GetOptions) (io.ReadCloser, error)
+GetWithMeta(ctx context.Context, key string, attributes []string, options ...GetOptions) (io.ReadCloser, map[string]string, error)
+Put(ctx context.Context, key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error
+Del(ctx context.Context, key string) error
+DelMulti(ctx context.Context, keys []string) error
+Head(ctx context.Context, key string, meta []string) (map[string]string, error)
+ListObject(ctx context.Context, key string, prefix string, marker string, maxKeys int, delimiter string) ([]string, error)
+SignURL(ctx context.Context, key string, expired int64) (string, error)
+GetAndDecompress(ctx context.Context, key string) (string, error)
+GetAndDecompressAsReader(ctx context.Context, key string) (io.ReadCloser, error)
+CompressAndPut(ctx context.Context, key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error
+Range(ctx context.Context, key string, offset int64, length int64) (io.ReadCloser, error)
+Exists(ctx context.Context, key string)(bool, error)
 ```

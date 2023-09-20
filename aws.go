@@ -1,4 +1,4 @@
-package eoss
+package eos
 
 import (
 	"bytes"
@@ -17,31 +17,30 @@ import (
 	"github.com/golang/snappy"
 )
 
-var _ Component = (*S3)(nil)
+var _ Client = (*S3)(nil)
 
 type S3 struct {
 	ShardsBucket map[string]string
 	BucketName   string
-	Client       *s3.S3
-	ctx          context.Context
-	cfg          *config
+	client       *s3.S3
+	cfg          *BucketConfig
 	compressor   Compressor
 }
 
-func (a *S3) Copy(srcKey, dstKey string, options ...CopyOption) error {
+func (a *S3) Copy(ctx context.Context, srcKey, dstKey string, options ...CopyOption) error {
 	cfg := DefaultCopyOptions()
 	for _, opt := range options {
 		opt(cfg)
 	}
 	var copySource = srcKey
 	if !cfg.rawSrcKey {
-		srcBucket, err := a.getBucket(srcKey)
+		srcBucket, err := a.getBucket(ctx, srcKey)
 		if err != nil {
 			return err
 		}
 		copySource = fmt.Sprintf("/%s/%s", srcBucket, srcKey)
 	}
-	bucketName, err := a.getBucket(dstKey)
+	bucketName, err := a.getBucket(ctx, dstKey)
 	if err != nil {
 		return err
 	}
@@ -57,7 +56,7 @@ func (a *S3) Copy(srcKey, dstKey string, options ...CopyOption) error {
 	// copy metadata
 	if len(cfg.metaKeysToCopy) > 0 {
 		// 如果传了 attributes 数组的情况下只做部分 meta 的拷贝
-		metadata, err := a.Head(srcKey, cfg.metaKeysToCopy)
+		metadata, err := a.Head(ctx, srcKey, cfg.metaKeysToCopy)
 		if err != nil {
 			return err
 		}
@@ -71,31 +70,18 @@ func (a *S3) Copy(srcKey, dstKey string, options ...CopyOption) error {
 	for k, v := range cfg.meta {
 		input.Metadata[k] = aws.String(v)
 	}
-	_, err = a.Client.CopyObjectWithContext(a.ctx, input)
+	_, err = a.client.CopyObjectWithContext(ctx, input)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (a *S3) GetBucketName(key string) (string, error) {
-	return a.getBucket(key)
+func (a *S3) GetBucketName(ctx context.Context, key string) (string, error) {
+	return a.getBucket(ctx, key)
 }
 
-func (a *S3) WithContext(ctx context.Context) Component {
-	b := &S3{
-		ShardsBucket: a.ShardsBucket,
-		BucketName:   a.BucketName,
-		Client:       a.Client,
-		ctx:          ctx,
-	}
-	return b
-}
-
-func (a *S3) getBucket(key string) (string, error) {
-	if a.ctx == nil {
-		a.ctx = context.Background()
-	}
+func (a *S3) getBucket(ctx context.Context, key string) (string, error) {
 	if a.ShardsBucket != nil && len(a.ShardsBucket) > 0 {
 		keyLength := len(key)
 		bucketName := a.ShardsBucket[strings.ToLower(key[keyLength-1:keyLength])]
@@ -109,9 +95,9 @@ func (a *S3) getBucket(key string) (string, error) {
 	return a.BucketName, nil
 }
 
-// don't forget to call the close() method of the io.ReadCloser
-func (a *S3) GetAsReader(key string, options ...GetOptions) (io.ReadCloser, error) {
-	bucketName, err := a.getBucket(key)
+// GetAsReader don't forget to call the close() method of the io.ReadCloser
+func (a *S3) GetAsReader(ctx context.Context, key string, options ...GetOptions) (io.ReadCloser, error) {
+	bucketName, err := a.getBucket(ctx, key)
 	if err != nil {
 		return nil, err
 	}
@@ -120,9 +106,9 @@ func (a *S3) GetAsReader(key string, options ...GetOptions) (io.ReadCloser, erro
 		Bucket: aws.String(bucketName),
 		Key:    aws.String(key),
 	}
-	setS3Options(options, input)
+	setS3Options(ctx, options, input)
 
-	result, err := a.Client.GetObjectWithContext(a.ctx, input)
+	result, err := a.client.GetObjectWithContext(ctx, input)
 	if err != nil {
 		if aerr, ok := err.(awserr.Error); ok {
 			if aerr.Code() == s3.ErrCodeNoSuchKey {
@@ -135,9 +121,9 @@ func (a *S3) GetAsReader(key string, options ...GetOptions) (io.ReadCloser, erro
 	return result.Body, err
 }
 
-// don't forget to call the close() method of the io.ReadCloser
-func (a *S3) GetWithMeta(key string, attributes []string, options ...GetOptions) (io.ReadCloser, map[string]string, error) {
-	bucketName, err := a.getBucket(key)
+// GetWithMeta don't forget to call the close() method of the io.ReadCloser
+func (a *S3) GetWithMeta(ctx context.Context, key string, attributes []string, options ...GetOptions) (io.ReadCloser, map[string]string, error) {
+	bucketName, err := a.getBucket(ctx, key)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -146,9 +132,9 @@ func (a *S3) GetWithMeta(key string, attributes []string, options ...GetOptions)
 		Bucket: aws.String(bucketName),
 		Key:    aws.String(key),
 	}
-	setS3Options(options, input)
+	setS3Options(ctx, options, input)
 
-	result, err := a.Client.GetObjectWithContext(a.ctx, input)
+	result, err := a.client.GetObjectWithContext(ctx, input)
 	if err != nil {
 		if aerr, ok := err.(awserr.Error); ok {
 			if aerr.Code() == s3.ErrCodeNoSuchKey {
@@ -157,21 +143,21 @@ func (a *S3) GetWithMeta(key string, attributes []string, options ...GetOptions)
 		}
 		return nil, nil, err
 	}
-	return result.Body, getS3Meta(attributes, mergeHttpStandardHeaders(&HeadGetObjectOutputWrapper{
+	return result.Body, getS3Meta(ctx, attributes, mergeHttpStandardHeaders(&HeadGetObjectOutputWrapper{
 		getObjectOutput: result,
 	})), err
 }
 
-func (a *S3) Get(key string, options ...GetOptions) (string, error) {
-	data, err := a.GetBytes(key, options...)
+func (a *S3) Get(ctx context.Context, key string, options ...GetOptions) (string, error) {
+	data, err := a.GetBytes(ctx, key, options...)
 	if err != nil {
 		return "", err
 	}
 	return string(data), nil
 }
 
-func (a *S3) GetBytes(key string, options ...GetOptions) ([]byte, error) {
-	result, err := a.get(key, options...)
+func (a *S3) GetBytes(ctx context.Context, key string, options ...GetOptions) ([]byte, error) {
+	result, err := a.get(ctx, key, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -189,22 +175,26 @@ func (a *S3) GetBytes(key string, options ...GetOptions) ([]byte, error) {
 	return ioutil.ReadAll(body)
 }
 
-func (a *S3) Range(key string, offset int64, length int64) (io.ReadCloser, error) {
+func (a *S3) Range(ctx context.Context, key string, offset int64, length int64) (io.ReadCloser, error) {
 	readRange := fmt.Sprintf("bytes=%d-%d", offset, offset+length-1)
+	bucketName, err := a.getBucket(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("range getBucket fail, %w", err)
+	}
 	input := &s3.GetObjectInput{
-		Bucket: aws.String(a.BucketName),
+		Bucket: aws.String(bucketName),
 		Key:    aws.String(key),
 		Range:  &readRange,
 	}
-	r, err := a.Client.GetObjectWithContext(a.ctx, input)
+	r, err := a.client.GetObjectWithContext(ctx, input)
 	if err != nil {
 		return nil, err
 	}
 	return r.Body, nil
 }
 
-func (a *S3) GetAndDecompress(key string) (string, error) {
-	result, err := a.get(key)
+func (a *S3) GetAndDecompress(ctx context.Context, key string) (string, error) {
+	result, err := a.get(ctx, key)
 	if err != nil {
 		return "", err
 	}
@@ -254,8 +244,8 @@ func (a *S3) GetAndDecompress(key string) (string, error) {
 	return string(data), nil
 }
 
-func (a *S3) GetAndDecompressAsReader(key string) (io.ReadCloser, error) {
-	result, err := a.GetAndDecompress(key)
+func (a *S3) GetAndDecompressAsReader(ctx context.Context, key string) (io.ReadCloser, error) {
+	result, err := a.GetAndDecompress(ctx, key)
 	if err != nil {
 		return nil, err
 	}
@@ -263,8 +253,8 @@ func (a *S3) GetAndDecompressAsReader(key string) (io.ReadCloser, error) {
 	return ioutil.NopCloser(strings.NewReader(result)), nil
 }
 
-func (a *S3) Put(key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error {
-	bucketName, err := a.getBucket(key)
+func (a *S3) Put(ctx context.Context, key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error {
+	bucketName, err := a.getBucket(ctx, key)
 	if err != nil {
 		return err
 	}
@@ -310,7 +300,7 @@ func (a *S3) Put(key string, reader io.ReadSeeker, meta map[string]string, optio
 	}
 
 	err = retry.Do(func() error {
-		_, err := a.Client.PutObjectWithContext(a.ctx, input)
+		_, err := a.client.PutObjectWithContext(ctx, input)
 		if err != nil && reader != nil {
 			// Reset the body reader after the request since at this point it's already read
 			// Note that it's safe to ignore the error here since the 0,0 position is always valid
@@ -322,7 +312,7 @@ func (a *S3) Put(key string, reader io.ReadSeeker, meta map[string]string, optio
 	return err
 }
 
-func (a *S3) CompressAndPut(key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error {
+func (a *S3) PutAndCompress(ctx context.Context, key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error {
 	data, err := ioutil.ReadAll(reader)
 	if err != nil {
 		return err
@@ -335,11 +325,11 @@ func (a *S3) CompressAndPut(key string, reader io.ReadSeeker, meta map[string]st
 
 	meta["Compressor"] = "snappy"
 
-	return a.Put(key, bytes.NewReader(encodedBytes), meta, options...)
+	return a.Put(ctx, key, bytes.NewReader(encodedBytes), meta, options...)
 }
 
-func (a *S3) Del(key string) error {
-	bucketName, err := a.getBucket(key)
+func (a *S3) Del(ctx context.Context, key string) error {
+	bucketName, err := a.getBucket(ctx, key)
 	if err != nil {
 		return err
 	}
@@ -349,14 +339,14 @@ func (a *S3) Del(key string) error {
 		Key:    aws.String(key),
 	}
 
-	_, err = a.Client.DeleteObjectWithContext(a.ctx, input)
+	_, err = a.client.DeleteObjectWithContext(ctx, input)
 	return err
 }
 
-func (a *S3) DelMulti(keys []string) error {
+func (a *S3) DelMulti(ctx context.Context, keys []string) error {
 	bucketsNameKeys := make(map[string][]string)
 	for _, key := range keys {
-		bucketName, err := a.getBucket(key)
+		bucketName, err := a.getBucket(ctx, key)
 		if err != nil {
 			return err
 		}
@@ -380,7 +370,7 @@ func (a *S3) DelMulti(keys []string) error {
 			},
 		}
 
-		_, err := a.Client.DeleteObjectsWithContext(a.ctx, input)
+		_, err := a.client.DeleteObjectsWithContext(ctx, input)
 		if err != nil {
 			return err
 		}
@@ -389,8 +379,8 @@ func (a *S3) DelMulti(keys []string) error {
 	return nil
 }
 
-func (a *S3) Head(key string, attributes []string) (map[string]string, error) {
-	bucketName, err := a.getBucket(key)
+func (a *S3) Head(ctx context.Context, key string, attributes []string) (map[string]string, error) {
+	bucketName, err := a.getBucket(ctx, key)
 	if err != nil {
 		return nil, err
 	}
@@ -400,8 +390,7 @@ func (a *S3) Head(key string, attributes []string) (map[string]string, error) {
 		Key:    aws.String(key),
 	}
 
-	result, err := a.Client.HeadObjectWithContext(a.ctx, input)
-
+	result, err := a.client.HeadObjectWithContext(ctx, input)
 	if err != nil {
 		if aerr, ok := err.(awserr.RequestFailure); ok {
 			if aerr.StatusCode() == 404 {
@@ -410,13 +399,13 @@ func (a *S3) Head(key string, attributes []string) (map[string]string, error) {
 		}
 		return nil, err
 	}
-	return getS3Meta(attributes, mergeHttpStandardHeaders(&HeadGetObjectOutputWrapper{
+	return getS3Meta(ctx, attributes, mergeHttpStandardHeaders(&HeadGetObjectOutputWrapper{
 		headObjectOutput: result,
 	})), nil
 }
 
-func (a *S3) ListObject(key string, prefix string, marker string, maxKeys int, delimiter string) ([]string, error) {
-	bucketName, err := a.getBucket(key)
+func (a *S3) ListObject(ctx context.Context, key string, prefix string, marker string, maxKeys int, delimiter string) ([]string, error) {
+	bucketName, err := a.getBucket(ctx, key)
 	if err != nil {
 		return nil, err
 	}
@@ -437,7 +426,7 @@ func (a *S3) ListObject(key string, prefix string, marker string, maxKeys int, d
 		input.Delimiter = aws.String(delimiter)
 	}
 
-	result, err := a.Client.ListObjectsWithContext(a.ctx, input)
+	result, err := a.client.ListObjectsWithContext(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -450,8 +439,8 @@ func (a *S3) ListObject(key string, prefix string, marker string, maxKeys int, d
 	return keys, nil
 }
 
-func (a *S3) SignURL(key string, expired int64, options ...SignOptions) (string, error) {
-	bucketName, err := a.getBucket(key)
+func (a *S3) SignURL(ctx context.Context, key string, expired int64, options ...SignOptions) (string, error) {
+	bucketName, err := a.getBucket(ctx, key)
 	if err != nil {
 		return "", err
 	}
@@ -466,12 +455,12 @@ func (a *S3) SignURL(key string, expired int64, options ...SignOptions) (string,
 	if signOptions.process != nil {
 		panic("process option is not supported for s3")
 	}
-	req, _ := a.Client.GetObjectRequest(input)
+	req, _ := a.client.GetObjectRequest(input)
 	return req.Presign(time.Duration(expired) * time.Second)
 }
 
-func (a *S3) Exists(key string) (bool, error) {
-	bucketName, err := a.getBucket(key)
+func (a *S3) Exists(ctx context.Context, key string) (bool, error) {
+	bucketName, err := a.getBucket(ctx, key)
 	if err != nil {
 		return false, err
 	}
@@ -480,7 +469,7 @@ func (a *S3) Exists(key string) (bool, error) {
 		Bucket: aws.String(bucketName),
 		Key:    aws.String(key),
 	}
-	_, err = a.Client.HeadObjectWithContext(a.ctx, input)
+	_, err = a.client.HeadObjectWithContext(ctx, input)
 	if err == nil {
 		return true, nil
 	}
@@ -493,8 +482,8 @@ func (a *S3) Exists(key string) (bool, error) {
 	return false, err
 }
 
-func (a *S3) get(key string, options ...GetOptions) (*s3.GetObjectOutput, error) {
-	bucketName, err := a.getBucket(key)
+func (a *S3) get(ctx context.Context, key string, options ...GetOptions) (*s3.GetObjectOutput, error) {
+	bucketName, err := a.getBucket(ctx, key)
 	if err != nil {
 		return nil, err
 	}
@@ -503,10 +492,8 @@ func (a *S3) get(key string, options ...GetOptions) (*s3.GetObjectOutput, error)
 		Bucket: aws.String(bucketName),
 		Key:    aws.String(key),
 	}
-	setS3Options(options, input)
-
-	result, err := a.Client.GetObjectWithContext(a.ctx, input)
-
+	setS3Options(ctx, options, input)
+	result, err := a.client.GetObjectWithContext(ctx, input)
 	if err != nil {
 		if aerr, ok := err.(awserr.Error); ok {
 			if aerr.Code() == s3.ErrCodeNoSuchKey {
@@ -519,7 +506,7 @@ func (a *S3) get(key string, options ...GetOptions) (*s3.GetObjectOutput, error)
 	return result, nil
 }
 
-func getS3Meta(attributes []string, metaData map[string]*string) map[string]string {
+func getS3Meta(ctx context.Context, attributes []string, metaData map[string]*string) map[string]string {
 	// https://github.com/aws/aws-sdk-go/issues/445
 	// aws 会将 meta 的首字母大写，在这里需要转换下
 	res := make(map[string]string)
@@ -532,7 +519,7 @@ func getS3Meta(attributes []string, metaData map[string]*string) map[string]stri
 	return res
 }
 
-func setS3Options(options []GetOptions, getObjectInput *s3.GetObjectInput) {
+func setS3Options(ctx context.Context, options []GetOptions, getObjectInput *s3.GetObjectInput) {
 	getOpts := DefaultGetOptions()
 	for _, opt := range options {
 		opt(getOpts)

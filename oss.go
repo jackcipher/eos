@@ -1,4 +1,4 @@
-package eoss
+package eos
 
 import (
 	"bytes"
@@ -16,27 +16,27 @@ import (
 	"github.com/golang/snappy"
 )
 
-var _ Component = (*OSS)(nil)
+var _ Client = (*OSS)(nil)
 
 type OSS struct {
 	Bucket     *oss.Bucket
 	Shards     map[string]*oss.Bucket
-	cfg        *config
+	cfg        *BucketConfig
 	compressor Compressor
 }
 
-func (ossClient *OSS) Copy(srcKey, dstKey string, options ...CopyOption) error {
+func (ossClient *OSS) Copy(ctx context.Context, srcKey, dstKey string, options ...CopyOption) error {
 	cfg := DefaultCopyOptions()
 	for _, opt := range options {
 		opt(cfg)
 	}
-	bucket, err := ossClient.getBucket(dstKey)
+	bucket, err := ossClient.getBucket(ctx, dstKey)
 	if err != nil {
 		return err
 	}
 	srcKeyWithBucket := srcKey
 	if !cfg.rawSrcKey {
-		srcBucket, err := ossClient.getBucket(srcKey)
+		srcBucket, err := ossClient.getBucket(ctx, srcKey)
 		if err != nil {
 			return err
 		}
@@ -46,9 +46,10 @@ func (ossClient *OSS) Copy(srcKey, dstKey string, options ...CopyOption) error {
 	if cfg.metaKeysToCopy != nil || cfg.meta != nil {
 		ossOptions = append(ossOptions, oss.MetadataDirective(oss.MetaReplace))
 	}
+	ossOptions = append(ossOptions, oss.WithContext(ctx))
 	if len(cfg.metaKeysToCopy) > 0 {
 		// 如果传了 attributes 数组的情况下只做部分 meta 的拷贝
-		meta, err := ossClient.Head(srcKey, cfg.metaKeysToCopy)
+		meta, err := ossClient.Head(ctx, srcKey, cfg.metaKeysToCopy)
 		if err != nil {
 			return err
 		}
@@ -66,36 +67,25 @@ func (ossClient *OSS) Copy(srcKey, dstKey string, options ...CopyOption) error {
 	return nil
 }
 
-func (ossClient *OSS) GetBucketName(key string) (string, error) {
-	b, err := ossClient.getBucket(key)
+func (ossClient *OSS) GetBucketName(ctx context.Context, key string) (string, error) {
+	b, err := ossClient.getBucket(ctx, key)
 	if err != nil {
 		return "", err
 	}
 	return b.BucketName, nil
 }
 
-func (ossClient *OSS) WithContext(context.Context) Component {
-	// oss 暂时不好支持context，先忽略
-	return ossClient
-}
-
-func (ossClient *OSS) getBucket(key string) (*oss.Bucket, error) {
-	if ossClient.Shards != nil && len(ossClient.Shards) > 0 {
-		keyLength := len(key)
-		bucket := ossClient.Shards[strings.ToLower(key[keyLength-1:keyLength])]
-		if bucket == nil {
-			return nil, errors.New("shards can't find bucket")
-		}
-
-		return bucket, nil
+func (ossClient *OSS) Get(ctx context.Context, key string, options ...GetOptions) (string, error) {
+	data, err := ossClient.GetBytes(ctx, key, options...)
+	if err != nil {
+		return "", err
 	}
-
-	return ossClient.Bucket, nil
+	return string(data), nil
 }
 
-// don't forget to call the close() method of the io.ReadCloser
-func (ossClient *OSS) GetAsReader(key string, options ...GetOptions) (io.ReadCloser, error) {
-	bucket, err := ossClient.getBucket(key)
+// GetAsReader don't forget to call the close() method of the io.ReadCloser
+func (ossClient *OSS) GetAsReader(ctx context.Context, key string, options ...GetOptions) (io.ReadCloser, error) {
+	bucket, err := ossClient.getBucket(ctx, key)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +94,7 @@ func (ossClient *OSS) GetAsReader(key string, options ...GetOptions) (io.ReadClo
 	for _, opt := range options {
 		opt(getOpts)
 	}
-	readCloser, err := bucket.GetObject(key, getOSSOptions(getOpts)...)
+	readCloser, err := bucket.GetObject(key, getOSSOptions(ctx, getOpts)...)
 	if err != nil {
 		if oerr, ok := err.(oss.ServiceError); ok {
 			if oerr.StatusCode == 404 {
@@ -117,13 +107,13 @@ func (ossClient *OSS) GetAsReader(key string, options ...GetOptions) (io.ReadClo
 	return readCloser, nil
 }
 
-// don't forget to call the close() method of the io.ReadCloser
-func (ossClient *OSS) GetWithMeta(key string, attributes []string, options ...GetOptions) (io.ReadCloser, map[string]string, error) {
+// GetWithMeta don't forget to call the close() method of the io.ReadCloser
+func (ossClient *OSS) GetWithMeta(ctx context.Context, key string, attributes []string, options ...GetOptions) (io.ReadCloser, map[string]string, error) {
 	getOpts := DefaultGetOptions()
 	for _, opt := range options {
 		opt(getOpts)
 	}
-	result, err := ossClient.get(key, getOpts)
+	result, err := ossClient.get(ctx, key, getOpts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -131,23 +121,15 @@ func (ossClient *OSS) GetWithMeta(key string, attributes []string, options ...Ge
 		return nil, nil, nil
 	}
 
-	return result.Response.Body, getOSSMeta(attributes, result.Response.Headers), nil
+	return result.Response.Body, getOSSMeta(ctx, attributes, result.Response.Headers), nil
 }
 
-func (ossClient *OSS) Get(key string, options ...GetOptions) (string, error) {
-	data, err := ossClient.GetBytes(key, options...)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-func (ossClient *OSS) GetBytes(key string, options ...GetOptions) ([]byte, error) {
+func (ossClient *OSS) GetBytes(ctx context.Context, key string, options ...GetOptions) ([]byte, error) {
 	getOpts := DefaultGetOptions()
 	for _, opt := range options {
 		opt(getOpts)
 	}
-	result, err := ossClient.get(key, getOpts)
+	result, err := ossClient.get(ctx, key, getOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -174,12 +156,8 @@ func (ossClient *OSS) GetBytes(key string, options ...GetOptions) ([]byte, error
 	return data, err
 }
 
-func (ossClient *OSS) Range(key string, offset int64, length int64) (io.ReadCloser, error) {
-	return ossClient.Bucket.GetObject(key, oss.Range(offset, offset+length-1))
-}
-
-func (ossClient *OSS) GetAndDecompress(key string) (string, error) {
-	result, err := ossClient.get(key, DefaultGetOptions())
+func (ossClient *OSS) GetAndDecompress(ctx context.Context, key string) (string, error) {
+	result, err := ossClient.get(ctx, key, DefaultGetOptions())
 	if err != nil {
 		return "", err
 	}
@@ -230,16 +208,24 @@ func (ossClient *OSS) GetAndDecompress(key string) (string, error) {
 	return string(data), nil
 }
 
-func (ossClient *OSS) GetAndDecompressAsReader(key string) (io.ReadCloser, error) {
-	ret, err := ossClient.GetAndDecompress(key)
+func (ossClient *OSS) GetAndDecompressAsReader(ctx context.Context, key string) (io.ReadCloser, error) {
+	ret, err := ossClient.GetAndDecompress(ctx, key)
 	if err != nil {
 		return nil, err
 	}
 	return ioutil.NopCloser(strings.NewReader(ret)), nil
 }
 
-func (ossClient *OSS) Put(key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error {
-	bucket, err := ossClient.getBucket(key)
+func (ossClient *OSS) Range(ctx context.Context, key string, offset int64, length int64) (io.ReadCloser, error) {
+	var opts = []oss.Option{
+		oss.WithContext(ctx),
+		oss.Range(offset, offset+length-1),
+	}
+	return ossClient.Bucket.GetObject(key, opts...)
+}
+
+func (ossClient *OSS) Put(ctx context.Context, key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error {
+	bucket, err := ossClient.getBucket(ctx, key)
 	if err != nil {
 		return err
 	}
@@ -282,6 +268,7 @@ func (ossClient *OSS) Put(key string, reader io.ReadSeeker, meta map[string]stri
 			ossOptions = append(ossOptions, oss.ContentEncoding(ossClient.compressor.ContentEncoding()))
 		}
 	}
+	ossOptions = append(ossOptions, oss.WithContext(ctx))
 
 	return retry.Do(func() error {
 		err := bucket.PutObject(key, reader, ossOptions...)
@@ -294,7 +281,7 @@ func (ossClient *OSS) Put(key string, reader io.ReadSeeker, meta map[string]stri
 	}, retry.Attempts(3), retry.Delay(1*time.Second))
 }
 
-func (ossClient *OSS) CompressAndPut(key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error {
+func (ossClient *OSS) PutAndCompress(ctx context.Context, key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error {
 	data, err := ioutil.ReadAll(reader)
 	if err != nil {
 		return err
@@ -304,25 +291,24 @@ func (ossClient *OSS) CompressAndPut(key string, reader io.ReadSeeker, meta map[
 	}
 
 	encodedBytes := snappy.Encode(nil, data)
-
 	meta["Compressor"] = "snappy"
 
-	return ossClient.Put(key, bytes.NewReader(encodedBytes), meta, options...)
+	return ossClient.Put(ctx, key, bytes.NewReader(encodedBytes), meta, options...)
 }
 
-func (ossClient *OSS) Del(key string) error {
-	bucket, err := ossClient.getBucket(key)
+func (ossClient *OSS) Del(ctx context.Context, key string) error {
+	bucket, err := ossClient.getBucket(ctx, key)
 	if err != nil {
 		return err
 	}
 
-	return bucket.DeleteObject(key)
+	return bucket.DeleteObject(key, oss.WithContext(ctx))
 }
 
-func (ossClient *OSS) DelMulti(keys []string) error {
+func (ossClient *OSS) DelMulti(ctx context.Context, keys []string) error {
 	bucketsKeys := make(map[*oss.Bucket][]string)
 	for _, key := range keys {
-		bucket, err := ossClient.getBucket(key)
+		bucket, err := ossClient.getBucket(ctx, key)
 		if err != nil {
 			return err
 		}
@@ -330,7 +316,7 @@ func (ossClient *OSS) DelMulti(keys []string) error {
 	}
 
 	for bucket, bKeys := range bucketsKeys {
-		_, err := bucket.DeleteObjects(bKeys)
+		_, err := bucket.DeleteObjects(bKeys, oss.WithContext(ctx))
 		if err != nil {
 			return err
 		}
@@ -339,13 +325,13 @@ func (ossClient *OSS) DelMulti(keys []string) error {
 	return nil
 }
 
-func (ossClient *OSS) Head(key string, attributes []string) (map[string]string, error) {
-	bucket, err := ossClient.getBucket(key)
+func (ossClient *OSS) Head(ctx context.Context, key string, attributes []string) (map[string]string, error) {
+	bucket, err := ossClient.getBucket(ctx, key)
 	if err != nil {
 		return nil, err
 	}
 
-	headers, err := bucket.GetObjectDetailedMeta(key)
+	headers, err := bucket.GetObjectDetailedMeta(key, oss.WithContext(ctx))
 	if err != nil {
 		if oerr, ok := err.(oss.ServiceError); ok {
 			if oerr.StatusCode == 404 {
@@ -355,16 +341,16 @@ func (ossClient *OSS) Head(key string, attributes []string) (map[string]string, 
 		return nil, err
 	}
 
-	return getOSSMeta(attributes, headers), nil
+	return getOSSMeta(ctx, attributes, headers), nil
 }
 
-func (ossClient *OSS) ListObject(key string, prefix string, marker string, maxKeys int, delimiter string) ([]string, error) {
-	bucket, err := ossClient.getBucket(key)
+func (ossClient *OSS) ListObject(ctx context.Context, key string, prefix string, marker string, maxKeys int, delimiter string) ([]string, error) {
+	bucket, err := ossClient.getBucket(ctx, key)
 	if err != nil {
 		return nil, err
 	}
 
-	res, err := bucket.ListObjects(oss.Prefix(prefix), oss.Marker(marker), oss.MaxKeys(maxKeys), oss.Delimiter(delimiter))
+	res, err := bucket.ListObjects(oss.Prefix(prefix), oss.Marker(marker), oss.MaxKeys(maxKeys), oss.Delimiter(delimiter), oss.WithContext(ctx))
 	keys := make([]string, 0)
 	for _, v := range res.Objects {
 		keys = append(keys, v.Key)
@@ -373,8 +359,8 @@ func (ossClient *OSS) ListObject(key string, prefix string, marker string, maxKe
 	return keys, nil
 }
 
-func (ossClient *OSS) SignURL(key string, expired int64, options ...SignOptions) (string, error) {
-	bucket, err := ossClient.getBucket(key)
+func (ossClient *OSS) SignURL(ctx context.Context, key string, expired int64, options ...SignOptions) (string, error) {
+	bucket, err := ossClient.getBucket(ctx, key)
 	if err != nil {
 		return "", err
 	}
@@ -383,50 +369,26 @@ func (ossClient *OSS) SignURL(key string, expired int64, options ...SignOptions)
 		opt(signOptions)
 	}
 	if signOptions.process != nil {
-		return bucket.SignURL(key, oss.HTTPGet, expired, oss.Process(*signOptions.process))
+		return bucket.SignURL(key, oss.HTTPGet, expired, oss.Process(*signOptions.process), oss.WithContext(ctx))
 	}
-	return bucket.SignURL(key, oss.HTTPGet, expired)
+	return bucket.SignURL(key, oss.HTTPGet, expired, oss.WithContext(ctx))
 }
 
-func (ossClient *OSS) Exists(key string) (bool, error) {
-	bucket, err := ossClient.getBucket(key)
+func (ossClient *OSS) Exists(ctx context.Context, key string) (bool, error) {
+	bucket, err := ossClient.getBucket(ctx, key)
 	if err != nil {
 		return false, err
 	}
-	return bucket.IsObjectExist(key)
+	return bucket.IsObjectExist(key, oss.WithContext(ctx))
 }
 
-func getOSSMeta(attributes []string, headers http.Header) map[string]string {
-	meta := make(map[string]string)
-	for _, v := range attributes {
-		meta[v] = headers.Get(v)
-		if headers.Get(v) == "" {
-			meta[v] = headers.Get(oss.HTTPHeaderOssMetaPrefix + v)
-		}
-	}
-	return meta
-}
-
-func getOSSOptions(getOpts *getOptions) []oss.Option {
-	ossOpts := make([]oss.Option, 0)
-	if getOpts.contentEncoding != nil {
-		ossOpts = append(ossOpts, oss.ContentEncoding(*getOpts.contentEncoding))
-	}
-	if getOpts.contentType != nil {
-		ossOpts = append(ossOpts, oss.ContentEncoding(*getOpts.contentType))
-	}
-
-	return ossOpts
-}
-
-func (ossClient *OSS) get(key string, options *getOptions) (*oss.GetObjectResult, error) {
-	bucket, err := ossClient.getBucket(key)
+func (ossClient *OSS) get(ctx context.Context, key string, options *getOptions) (*oss.GetObjectResult, error) {
+	bucket, err := ossClient.getBucket(ctx, key)
 	if err != nil {
 		return nil, err
 	}
 
-	result, err := bucket.DoGetObject(&oss.GetObjectRequest{ObjectKey: key}, getOSSOptions(options))
-
+	result, err := bucket.DoGetObject(&oss.GetObjectRequest{ObjectKey: key}, getOSSOptions(ctx, options))
 	if err != nil {
 		if oerr, ok := err.(oss.ServiceError); ok {
 			if oerr.StatusCode == 404 {
@@ -444,4 +406,42 @@ func extractOSSRequestID(resp *oss.Response) string {
 		return ""
 	}
 	return resp.Headers.Get(oss.HTTPHeaderOssRequestID)
+}
+
+func getOSSMeta(ctx context.Context, attributes []string, headers http.Header) map[string]string {
+	meta := make(map[string]string)
+	for _, v := range attributes {
+		meta[v] = headers.Get(v)
+		if headers.Get(v) == "" {
+			meta[v] = headers.Get(oss.HTTPHeaderOssMetaPrefix + v)
+		}
+	}
+	return meta
+}
+
+func getOSSOptions(ctx context.Context, getOpts *getOptions) []oss.Option {
+	ossOpts := make([]oss.Option, 0)
+	if getOpts.contentEncoding != nil {
+		ossOpts = append(ossOpts, oss.ContentEncoding(*getOpts.contentEncoding))
+	}
+	if getOpts.contentType != nil {
+		ossOpts = append(ossOpts, oss.ContentEncoding(*getOpts.contentType))
+	}
+	ossOpts = append(ossOpts, oss.WithContext(ctx))
+
+	return ossOpts
+}
+
+func (ossClient *OSS) getBucket(ctx context.Context, key string) (*oss.Bucket, error) {
+	if ossClient.Shards != nil && len(ossClient.Shards) > 0 {
+		keyLength := len(key)
+		bucket := ossClient.Shards[strings.ToLower(key[keyLength-1:keyLength])]
+		if bucket == nil {
+			return nil, errors.New("shards can't find bucket")
+		}
+
+		return bucket, nil
+	}
+
+	return ossClient.Bucket, nil
 }

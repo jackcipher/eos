@@ -1,4 +1,4 @@
-package eoss
+package eos
 
 /**
 Put your environment configuration in ".env-oss"
@@ -6,7 +6,10 @@ Put your environment configuration in ".env-oss"
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"io/ioutil"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -28,53 +31,60 @@ const (
 )
 
 var (
-	ossClient Component
+	ossCmp Component
 )
 
 func init() {
-	configFile, err := ioutil.ReadFile("config-oss.toml")
-	if err != nil {
+	confs := `
+[eos]
+debug = false
+storageType = "s3"
+s3HttpTransportMaxConnsPerHost = 100
+s3HttpTransportIdleConnTimeout = "90s"
+accessKeyID = "%s"
+accessKeySecret = "%s"
+endpoint = "%s"
+bucket = "%s"
+s3ForcePathStyle = false 
+region = "%s"
+ssl = false
+`
+	confs = fmt.Sprintf(confs, os.Getenv("AK_ID"), os.Getenv("AK_SECRET"), os.Getenv("ENDPOINT"), os.Getenv("BUCKET"), os.Getenv("REGION"))
+	if err := econf.LoadFromReader(strings.NewReader(confs), toml.Unmarshal); err != nil {
 		panic(err)
 	}
-	err = econf.LoadFromReader(bytes.NewReader(configFile), toml.Unmarshal)
-	if err != nil {
-		panic(err)
-	}
-	client := Load("storage").Build()
-
-	if err != nil {
-		panic(err)
-	}
-
-	ossClient = client
+	client := Load("eos").Build()
+	ossCmp = client
 }
 
 func TestOSS_GetBucketName(t *testing.T) {
-	ossClient = Load("storage").Build(WithBucket("test-bucket"))
-	bn, err := ossClient.GetBucketName("fasdfsfsfsafsf")
+	ctx := context.TODO()
+	ossCmp = Load("eos").Build(WithBucket("test-bucket"))
+	bn, err := ossCmp.GetBucketName(ctx, "fasdfsfsfsafsf")
 	assert.NoError(t, err)
 	assert.Equal(t, "test-bucket", bn)
-	ossClient = Load("storage").Build(WithBucket("test-bucket"), WithShards([]string{"abcdefghi", "jklmnopqrstuvwxyz0123456789"}))
-	bn, err = ossClient.GetBucketName("fdsafaddafa")
+	ossCmp = Load("eos").Build(WithBucket("test-bucket"), WithShards([]string{"abcdefghi", "jklmnopqrstuvwxyz0123456789"}))
+	bn, err = ossCmp.GetBucketName(ctx, "fdsafaddafa")
 	assert.NoError(t, err)
 	assert.Equal(t, "test-bucket-abcdefghi", bn)
-	bn, err = ossClient.GetBucketName("fdsafaddafa1")
+	bn, err = ossCmp.GetBucketName(ctx, "fdsafaddafa1")
 	assert.NoError(t, err)
 	assert.Equal(t, "test-bucket-jklmnopqrstuvwxyz0123456789", bn)
 }
 
 func TestOSS_Put(t *testing.T) {
+	ctx := context.TODO()
 	meta := make(map[string]string)
 	meta["head"] = strconv.Itoa(expectHead)
 	meta["length"] = strconv.Itoa(expectLength)
 
-	err := ossClient.Put(guid, strings.NewReader(content), meta)
+	err := ossCmp.Put(ctx, guid, strings.NewReader(content), meta)
 	if err != nil {
 		t.Log("oss put error", err)
 		t.Fail()
 	}
 
-	err = ossClient.Put(guid, bytes.NewReader([]byte(content)), meta)
+	err = ossCmp.Put(ctx, guid, bytes.NewReader([]byte(content)), meta)
 	if err != nil {
 		t.Log("oss put byte array error", err)
 		t.Fail()
@@ -82,17 +92,18 @@ func TestOSS_Put(t *testing.T) {
 }
 
 func TestOSS_CompressAndPut(t *testing.T) {
+	ctx := context.TODO()
 	meta := make(map[string]string)
 	meta["head"] = strconv.Itoa(expectHead)
 	meta["length"] = strconv.Itoa(expectLength)
 
-	err := ossClient.CompressAndPut(compressGUID, strings.NewReader(compressContent), meta)
+	err := ossCmp.PutAndCompress(ctx, compressGUID, strings.NewReader(compressContent), meta)
 	if err != nil {
 		t.Log("oss put error", err)
 		t.Fail()
 	}
 
-	err = ossClient.CompressAndPut(compressGUID, bytes.NewReader([]byte(compressContent)), meta)
+	err = ossCmp.PutAndCompress(ctx, compressGUID, bytes.NewReader([]byte(compressContent)), meta)
 	if err != nil {
 		t.Log("oss put error", err)
 		t.Fail()
@@ -100,6 +111,7 @@ func TestOSS_CompressAndPut(t *testing.T) {
 }
 
 func TestOSS_Head(t *testing.T) {
+	ctx := context.TODO()
 	attributes := make([]string, 0)
 	attributes = append(attributes, "head")
 	var res map[string]string
@@ -107,7 +119,7 @@ func TestOSS_Head(t *testing.T) {
 	var head int
 	var length int
 
-	res, err = ossClient.Head(guid, attributes)
+	res, err = ossCmp.Head(ctx, guid, attributes)
 	if err != nil {
 		t.Log("oss head error", err)
 		t.Fail()
@@ -121,7 +133,7 @@ func TestOSS_Head(t *testing.T) {
 
 	attributes = append(attributes, "length")
 	attributes = append(attributes, "Content-Type")
-	res, err = ossClient.Head(guid, attributes)
+	res, err = ossCmp.Head(ctx, guid, attributes)
 	if err != nil {
 		t.Log("oss head error", err)
 		t.Fail()
@@ -141,13 +153,14 @@ func TestOSS_Head(t *testing.T) {
 }
 
 func TestOSS_Get(t *testing.T) {
-	res, err := ossClient.Get(guid)
+	ctx := context.TODO()
+	res, err := ossCmp.Get(ctx, guid)
 	if err != nil || res != content {
 		t.Log("oss get content fail, res:", res, "err:", err)
 		t.Fail()
 	}
 
-	res1, err := ossClient.GetAsReader(guid)
+	res1, err := ossCmp.GetAsReader(ctx, guid)
 	if err != nil {
 		t.Fatal("oss get content as reader fail, err:", err)
 	}
@@ -157,13 +170,13 @@ func TestOSS_Get(t *testing.T) {
 		t.Fatal("oss get as reader, readAll error")
 	}
 
-	resBytes, err := ossClient.GetBytes(guid, EnableCRCValidation())
+	resBytes, err := ossCmp.GetBytes(ctx, guid, EnableCRCValidation())
 	if err != nil || string(resBytes) != content {
 		t.Log("oss get content fail, res:", string(resBytes), "err:", err)
 		t.Fail()
 	}
 
-	res, err = ossClient.Get(guid, EnableCRCValidation())
+	res, err = ossCmp.Get(ctx, guid, EnableCRCValidation())
 	if err != nil || res != content {
 		t.Log("oss get content fail, res:", res, "err:", err)
 		t.Fail()
@@ -171,9 +184,10 @@ func TestOSS_Get(t *testing.T) {
 }
 
 func TestOSS_GetWithMeta(t *testing.T) {
+	ctx := context.TODO()
 	attributes := make([]string, 0)
 	attributes = append(attributes, "head")
-	res, meta, err := ossClient.GetWithMeta(guid, attributes)
+	res, meta, err := ossCmp.GetWithMeta(ctx, guid, attributes)
 	if err != nil {
 		t.Fatal("oss get content as reader fail, err:", err)
 	}
@@ -191,7 +205,8 @@ func TestOSS_GetWithMeta(t *testing.T) {
 }
 
 func TestOSS_GetAndDecompress(t *testing.T) {
-	reader, meta, err := ossClient.GetWithMeta(compressGUID, []string{MetaCompressor})
+	ctx := context.TODO()
+	reader, meta, err := ossCmp.GetWithMeta(ctx, compressGUID, []string{MetaCompressor})
 	if err != nil {
 		t.Log("oss get error", err)
 		t.Fail()
@@ -210,13 +225,13 @@ func TestOSS_GetAndDecompress(t *testing.T) {
 		t.Fail()
 	}
 
-	res, err := ossClient.GetAndDecompress(compressGUID)
+	res, err := ossCmp.GetAndDecompress(ctx, compressGUID)
 	if err != nil || res != compressContent {
 		t.Log("aws get oss content fail, res:", res, "err:", err)
 		t.Fail()
 	}
 
-	res1, err := ossClient.GetAndDecompressAsReader(compressGUID)
+	res1, err := ossCmp.GetAndDecompressAsReader(ctx, compressGUID)
 	if err != nil {
 		t.Fatal("oss get content as reader fail, err:", err)
 	}
@@ -228,20 +243,21 @@ func TestOSS_GetAndDecompress(t *testing.T) {
 }
 
 func TestOSS_GetAndDecompress2(t *testing.T) {
-	_, meta, err := ossClient.GetWithMeta(guid, []string{MetaCompressor})
+	ctx := context.TODO()
+	_, meta, err := ossCmp.GetWithMeta(ctx, guid, []string{MetaCompressor})
 	if err != nil {
 		t.Log("oss get error", err)
 		t.Fail()
 	}
 	assert.Empty(t, meta[MetaCompressor])
 
-	res, err := ossClient.GetAndDecompress(guid)
+	res, err := ossCmp.GetAndDecompress(ctx, guid)
 	if err != nil || res != content {
 		t.Log("aws get oss content fail, res:", res, "err:", err)
 		t.Fail()
 	}
 
-	res1, err := ossClient.GetAndDecompressAsReader(guid)
+	res1, err := ossCmp.GetAndDecompressAsReader(ctx, guid)
 	if err != nil {
 		t.Fatal("oss get content as reader fail, err:", err)
 	}
@@ -253,7 +269,8 @@ func TestOSS_GetAndDecompress2(t *testing.T) {
 }
 
 func TestOSS_SignURL(t *testing.T) {
-	res, err := ossClient.SignURL(guid, 60)
+	ctx := context.TODO()
+	res, err := ossCmp.SignURL(ctx, guid, 60)
 	if err != nil {
 		t.Log("oss signUrl fail, res:", res, "err:", err)
 		t.Fail()
@@ -261,7 +278,8 @@ func TestOSS_SignURL(t *testing.T) {
 }
 
 func TestOSS_ListObject(t *testing.T) {
-	res, err := ossClient.ListObject(guid, guid[0:4], "", 10, "")
+	ctx := context.TODO()
+	res, err := ossCmp.ListObject(ctx, guid, guid[0:4], "", 10, "")
 	if err != nil || len(res) == 0 {
 		t.Log("oss list objects fail, res:", res, "err:", err)
 		t.Fail()
@@ -269,7 +287,8 @@ func TestOSS_ListObject(t *testing.T) {
 }
 
 func TestOSS_Del(t *testing.T) {
-	err := ossClient.Del(guid)
+	ctx := context.TODO()
+	err := ossCmp.Del(ctx, guid)
 	if err != nil {
 		t.Log("oss del key fail, err:", err)
 		t.Fail()
@@ -277,19 +296,20 @@ func TestOSS_Del(t *testing.T) {
 }
 
 func TestOSS_DelMulti(t *testing.T) {
+	ctx := context.TODO()
 	keys := []string{"aaa", "bb0", "ccc"}
 	for _, key := range keys {
-		ossClient.Put(key, strings.NewReader("2333333"), nil)
+		ossCmp.Put(ctx, key, strings.NewReader("2333333"), nil)
 	}
 
-	err := ossClient.DelMulti(keys)
+	err := ossCmp.DelMulti(ctx, keys)
 	if err != nil {
 		t.Log("aws del multi keys fail, err:", err)
 		t.Fail()
 	}
 
 	for _, key := range keys {
-		res, err := ossClient.Get(key)
+		res, err := ossCmp.Get(ctx, key)
 		if res != "" || err != nil {
 			t.Logf("key:%s should not be exist", key)
 			t.Fail()
@@ -298,7 +318,8 @@ func TestOSS_DelMulti(t *testing.T) {
 }
 
 func TestOSS_GetNotExist(t *testing.T) {
-	res1, err := ossClient.Get(guid + "123")
+	ctx := context.TODO()
+	res1, err := ossCmp.Get(ctx, guid+"123")
 	if res1 != "" || err != nil {
 		t.Log("oss get not exist key fail, res:", res1, "err:", err)
 		t.Fail()
@@ -306,7 +327,7 @@ func TestOSS_GetNotExist(t *testing.T) {
 
 	attributes := make([]string, 0)
 	attributes = append(attributes, "head")
-	res2, err := ossClient.Head(guid+"123", attributes)
+	res2, err := ossCmp.Head(ctx, guid+"123", attributes)
 	if res2 != nil || err != nil {
 		t.Log("oss head not exist key fail, res:", res2, "err:", err)
 		t.Fail()
@@ -314,14 +335,15 @@ func TestOSS_GetNotExist(t *testing.T) {
 }
 
 func TestOSS_Range(t *testing.T) {
+	ctx := context.TODO()
 	meta := make(map[string]string)
-	err := ossClient.Put(guid, strings.NewReader("123456"), meta)
+	err := ossCmp.Put(ctx, guid, strings.NewReader("123456"), meta)
 	if err != nil {
 		t.Log("oss put error", err)
 		t.Fail()
 	}
 
-	res, err := ossClient.Range(guid, 3, 3)
+	res, err := ossCmp.Range(ctx, guid, 3, 3)
 	if err != nil {
 		t.Log("oss range error", err)
 		t.Fail()
@@ -334,15 +356,16 @@ func TestOSS_Range(t *testing.T) {
 }
 
 func TestOSS_Exists(t *testing.T) {
+	ctx := context.TODO()
 	meta := make(map[string]string)
-	err := ossClient.Put(guid, strings.NewReader("123456"), meta)
+	err := ossCmp.Put(ctx, guid, strings.NewReader("123456"), meta)
 	if err != nil {
 		t.Log("oss put error", err)
 		t.Fail()
 	}
 
 	// test exists
-	ok, err := ossClient.Exists(guid)
+	ok, err := ossCmp.Exists(ctx, guid)
 	if err != nil {
 		t.Log("oss Exists error", err)
 		t.Fail()
@@ -352,14 +375,14 @@ func TestOSS_Exists(t *testing.T) {
 		t.Fail()
 	}
 
-	err = ossClient.Del(guid)
+	err = ossCmp.Del(ctx, guid)
 	if err != nil {
 		t.Log("oss del key fail, err:", err)
 		t.Fail()
 	}
 
 	// test not exists
-	ok, err = ossClient.Exists(guid)
+	ok, err = ossCmp.Exists(ctx, guid)
 	if err != nil {
 		t.Log("oss Exists error", err)
 		t.Fail()

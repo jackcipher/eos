@@ -1,13 +1,15 @@
-package eoss
+package eos
 
 type config struct {
-	Debug bool
-	bucketConfig
-	Buckets   map[string]bucketConfig
-	bucketKey string
+	// BucketConfig 全局默认配置
+	BucketConfig `mapstructure:",squash"`
+	// 单个buckets自定义配置
+	Buckets map[string]BucketConfig
 }
 
-type bucketConfig struct {
+type BucketConfig struct {
+	// Debug
+	Debug bool
 	// Required, value is one of oss/s3, case insensetive
 	StorageType string
 	// Required
@@ -16,7 +18,7 @@ type bucketConfig struct {
 	AccessKeySecret string
 	// Required
 	Endpoint string
-	// Required
+	// Required Bucket name
 	Bucket string
 	// Optional, choose which bucket to use based on the last character of the key,
 	// if bucket is 'content', shards is ['abc', 'edf'],
@@ -47,11 +49,10 @@ type bucketConfig struct {
 
 // DefaultConfig 返回默认配置
 func DefaultConfig() *config {
-	return &config{bucketConfig: bucketConfig{
+	return &config{BucketConfig: BucketConfig{
 		StorageType:             "s3",
 		S3HttpTimeoutSecs:       60,
 		EnableTraceInterceptor:  true,
 		EnableMetricInterceptor: true,
-	},
-	}
+	}}
 }

@@ -1,4 +1,4 @@
-package eoss
+package eos
 
 import (
 	"bytes"

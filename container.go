@@ -1,8 +1,6 @@
-package eoss
+package eos
 
 import (
-	"fmt"
-
 	"github.com/gotomicro/ego/core/econf"
 	"github.com/gotomicro/ego/core/elog"
 )
@@ -22,7 +20,7 @@ func DefaultContainer() *Container {
 
 func Load(key string) *Container {
 	c := DefaultContainer()
-	if err := econf.UnmarshalKey(key, &c.config.bucketConfig); err != nil {
+	if err := econf.UnmarshalKey(key, &c.config.BucketConfig); err != nil {
 		c.logger.Panic("parse config error", elog.FieldErr(err), elog.FieldKey(key))
 		return c
 	}
@@ -40,16 +38,50 @@ func (c *Container) Build(options ...BuildOption) Component {
 	for _, option := range options {
 		option(c)
 	}
-	if c.config.bucketKey != "" {
-		key := fmt.Sprintf("%s.buckets.%s", c.name, c.config.bucketKey)
-		if err := econf.UnmarshalKey(key, &c.config.bucketConfig); err != nil {
-			c.logger.Panic("parse bucket config error", elog.FieldErr(err), elog.FieldKey(key))
-			return nil
+
+	var cfg config
+	if err := econf.UnmarshalKey(c.name, &cfg); err != nil {
+		elog.Panic("UnmarshalKey fail", elog.String("name", c.name), elog.FieldErr(err))
+	}
+
+	cmp := Component{
+		logger:  c.logger,
+		config:  c.config,
+		clients: make(map[string]Client),
+	}
+
+	// 初始化默认Storage实例
+	if cfg.Bucket != "" {
+		// 如果根配置下设置了 bucket，则用此来初始化默认Storage
+		defaultBucketCfg := cfg.BucketConfig
+		s, err := newStorage(defaultBucketCfg.Bucket, &defaultBucketCfg, c.logger.With(elog.String("bucket", defaultBucketCfg.Bucket)))
+		if err != nil {
+			elog.Panic("newStorage fail", elog.String("key", defaultBucketCfg.Bucket), elog.FieldErr(err))
 		}
+		cmp.defaultClient = s
+		cmp.clients[defaultClientKey] = s
+	} else {
+		// 否则打印日志
+		elog.Info("default storage not set")
 	}
-	comp, err := newComponent(c.name, c.config, c.logger)
-	if err != nil {
-		c.logger.Panic("new eoss client fail", elog.FieldErr(err), elog.FieldValueAny(c.config))
+
+	// 初始化其他Storage实例
+	for bucketKey, bucketCfg := range cfg.Buckets {
+		key := c.name + ".buckets." + bucketKey
+		if bucketCfg.Bucket == "" {
+			elog.Panic("Single bucket name can't be empty", elog.String("key", key), elog.String("invalidBucketName", key+".bucket"))
+		}
+
+		singleBucketCfg := cfg.BucketConfig
+		if err := econf.UnmarshalKey(key, &singleBucketCfg); err != nil {
+			elog.Panic("Single bucket unmarshalKey fail", elog.String("key", key), elog.FieldErr(err))
+		}
+		s, err := newStorage(key, &singleBucketCfg, c.logger.With(elog.String("bucket", key)))
+		if err != nil {
+			elog.Panic("newStorage fail", elog.String("key", key), elog.FieldErr(err))
+		}
+		cmp.clients[bucketKey] = s
 	}
-	return comp
+
+	return cmp
 }
