@@ -31,7 +31,7 @@ const (
 )
 
 var (
-	ossCmp Component
+	ossCmp *Component
 )
 
 func init() {

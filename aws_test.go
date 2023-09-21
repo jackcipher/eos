@@ -26,7 +26,7 @@ const (
 )
 
 var (
-	awsCmp Component
+	awsCmp *Component
 )
 
 func init() {

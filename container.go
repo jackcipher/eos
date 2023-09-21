@@ -33,7 +33,7 @@ func Load(key string) *Container {
 	return c
 }
 
-func (c *Container) Build(options ...BuildOption) Component {
+func (c *Container) Build(options ...BuildOption) *Component {
 	Register(DefaultGzipCompressor)
 	for _, option := range options {
 		option(c)
@@ -44,7 +44,7 @@ func (c *Container) Build(options ...BuildOption) Component {
 		elog.Panic("UnmarshalKey fail", elog.String("name", c.name), elog.FieldErr(err))
 	}
 
-	cmp := Component{
+	cmp := &Component{
 		logger:  c.logger,
 		config:  c.config,
 		clients: make(map[string]Client),
