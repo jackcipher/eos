@@ -215,7 +215,7 @@ func (a *S3) GetAndDecompress(ctx context.Context, key string) (string, error) {
 			return "", errors.New("GetAndDecompress only supports snappy for now, got " + *compressor)
 		}
 
-		rawBytes, err := ioutil.ReadAll(body)
+		rawBytes, err := io.ReadAll(body)
 		if err != nil {
 			return "", err
 		}
@@ -224,7 +224,7 @@ func (a *S3) GetAndDecompress(ctx context.Context, key string) (string, error) {
 		if err != nil {
 			if errors.Is(err, snappy.ErrCorrupt) {
 				reader := snappy.NewReader(bytes.NewReader(rawBytes))
-				data, err := ioutil.ReadAll(reader)
+				data, err := io.ReadAll(reader)
 				if err != nil {
 					return "", err
 				}
@@ -258,12 +258,10 @@ func (a *S3) Put(ctx context.Context, key string, reader io.ReadSeeker, meta map
 	if err != nil {
 		return err
 	}
-
 	putOptions := DefaultPutOptions()
 	for _, opt := range options {
 		opt(putOptions)
 	}
-
 	input := &s3.PutObjectInput{
 		Body:        reader,
 		Bucket:      aws.String(bucketName),
@@ -283,19 +281,20 @@ func (a *S3) Put(ctx context.Context, key string, reader io.ReadSeeker, meta map
 	if putOptions.expires != nil {
 		input.Expires = putOptions.expires
 	}
-
 	if a.compressor != nil {
-		l, err := GetReaderLength(input.Body)
+		wrapReader, l, err := WrapReader(input.Body)
 		if err != nil {
 			return err
 		}
 		if l > a.cfg.CompressLimit {
-			input.Body, err = a.compressor.Compress(input.Body)
+			input.Body, _, err = a.compressor.Compress(wrapReader)
 			if err != nil {
 				return err
 			}
 			encoding := a.compressor.ContentEncoding()
 			input.ContentEncoding = &encoding
+		} else {
+			input.Body = wrapReader
 		}
 	}
 
