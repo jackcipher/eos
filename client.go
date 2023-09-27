@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptrace"
 	"strings"
@@ -111,6 +112,7 @@ func newStorage(name string, cfg *BucketConfig, logger *elog.Component) (Client,
 		}
 		if cfg.Debug {
 			config.LogLevel = aws.LogLevel(aws.LogDebugWithHTTPBody | aws.LogDebugWithSigning)
+			slog.Default().Enabled(context.Background(), slog.LevelDebug)
 		}
 
 		config.HTTPClient = &http.Client{

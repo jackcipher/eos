@@ -261,7 +261,7 @@ func (ossClient *OSS) Put(ctx context.Context, key string, reader io.ReadSeeker,
 			return err
 		}
 		if l > ossClient.cfg.CompressLimit {
-			reader, err = ossClient.compressor.Compress(reader)
+			reader, _, err = ossClient.compressor.Compress(reader)
 			if err != nil {
 				return err
 			}

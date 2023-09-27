@@ -20,18 +20,33 @@ func Register(comp Compressor) {
 }
 
 type Compressor interface {
-	Compress(reader io.ReadSeeker) (gzipReader io.ReadSeeker, err error)
+	// Compress(reader io.ReadSeeker) (gzipReader io.ReadSeeker, err error)
+	Compress(reader io.ReadSeeker) (gzipReader io.ReadSeeker, len int64, err error)
 	ContentEncoding() string
 }
 
 type GzipCompressor struct {
 }
 
-func (g *GzipCompressor) Compress(reader io.ReadSeeker) (gzipReader io.ReadSeeker, err error) {
-	return &gzipReadSeeker{
-		reader: reader,
-	}, nil
+func (g *GzipCompressor) Compress(reader io.ReadSeeker) (gzipReader io.ReadSeeker, len int64, err error) {
+	var buffer bytes.Buffer
+	gzipWriter := gzip.NewWriter(&buffer)
+	_, err = io.Copy(gzipWriter, reader)
+	if err != nil {
+		return nil, 0, err
+	}
+	err = gzipWriter.Close()
+	if err != nil {
+		return nil, 0, err
+	}
+	return bytes.NewReader(buffer.Bytes()), int64(buffer.Len()), nil
 }
+
+// func (g *GzipCompressor) Compress(reader io.ReadSeeker) (gzipReader io.ReadSeeker, err error) {
+// 	return &gzipReadSeeker{
+// 		reader: reader,
+// 	}, nil
+// }
 
 func (g *GzipCompressor) ContentEncoding() string {
 	return compressTypeGzip
@@ -74,13 +89,20 @@ func (crs *gzipReadSeeker) Seek(offset int64, whence int) (int64, error) {
 
 var DefaultGzipCompressor = &GzipCompressor{}
 
+func WrapReader(reader io.ReadSeeker) (io.ReadSeeker, int64, error) {
+	all, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, 0, err
+	}
+	return bytes.NewReader(all), int64(len(all)), nil
+}
+
 func GetReaderLength(reader io.ReadSeeker) (int64, error) {
 	// 保存当前的读写位置
 	originalPos, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return 0, err
 	}
-
 	// 移动到文件末尾以获取字节长度
 	length, err := reader.Seek(0, io.SeekEnd)
 	if err != nil {
@@ -91,6 +113,5 @@ func GetReaderLength(reader io.ReadSeeker) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-
 	return length, nil
 }

@@ -17,7 +17,7 @@ func TestCompress_gzip(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	reader, err := DefaultGzipCompressor.Compress(source)
+	reader, _, err := DefaultGzipCompressor.Compress(source)
 	if err != nil {
 		panic(err)
 	}
@@ -62,7 +62,7 @@ func TestGetLength(t *testing.T) {
 	}
 	t.Logf("length %d", length)
 
-	seeker, _ := DefaultGzipCompressor.Compress(source)
+	seeker, _, _ := DefaultGzipCompressor.Compress(source)
 	targetPath := os.Getenv("target_path")
 	_, err = os.Stat(targetPath)
 	if err == nil {
