@@ -293,8 +293,8 @@ func (a *S3) Put(ctx context.Context, key string, reader io.ReadSeeker, meta map
 			}
 			encoding := a.compressor.ContentEncoding()
 			input.ContentEncoding = &encoding
-			// input.SetContentLength(clen)
-			// meta["length"] = fmt.Sprintf("%d", clen)
+		} else {
+			input.Body = wrapReader
 		}
 	}
 
