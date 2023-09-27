@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -296,6 +297,7 @@ func (a *S3) Put(ctx context.Context, key string, reader io.ReadSeeker, meta map
 			}
 			encoding := a.compressor.ContentEncoding()
 			input.ContentEncoding = &encoding
+			slog.Debug("compress", slog.String("key", key), slog.String("compressor", encoding))
 		}
 	}
 
