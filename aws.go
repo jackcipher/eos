@@ -52,23 +52,24 @@ func (a *S3) Copy(ctx context.Context, srcKey, dstKey string, options ...CopyOpt
 	if cfg.metaKeysToCopy != nil || cfg.meta != nil {
 		input.SetMetadataDirective("REPLACE")
 		input.Metadata = make(map[string]*string)
-	}
-	// copy metadata
-	if len(cfg.metaKeysToCopy) > 0 {
-		// 如果传了 attributes 数组的情况下只做部分 meta 的拷贝
+		cfg.metaKeysToCopy = append(cfg.metaKeysToCopy, "Content-Encoding") // always copy content-encoding
 		metadata, err := a.Head(ctx, srcKey, cfg.metaKeysToCopy)
 		if err != nil {
 			return err
 		}
 		if len(metadata) > 0 {
 			for k, v := range metadata {
+				if k == "Content-Encoding" {
+					input.ContentEncoding = aws.String(v)
+					continue
+				}
 				input.Metadata[k] = aws.String(v)
 			}
 		}
-	}
-	// specify new metadata
-	for k, v := range cfg.meta {
-		input.Metadata[k] = aws.String(v)
+		// specify new metadata
+		for k, v := range cfg.meta {
+			input.Metadata[k] = aws.String(v)
+		}
 	}
 	_, err = a.client.CopyObjectWithContext(ctx, input)
 	if err != nil {
