@@ -20,10 +20,6 @@ func DefaultContainer() *Container {
 
 func Load(key string) *Container {
 	c := DefaultContainer()
-	if err := econf.UnmarshalKey(key, &c.config.BucketConfig); err != nil {
-		c.logger.Panic("parse config error", elog.FieldErr(err), elog.FieldKey(key))
-		return c
-	}
 	if err := econf.UnmarshalKey(key, &c.config); err != nil {
 		c.logger.Panic("parse config error", elog.FieldErr(err), elog.FieldKey(key))
 		return c
@@ -39,11 +35,6 @@ func (c *Container) Build(options ...BuildOption) *Component {
 		option(c)
 	}
 
-	var cfg config
-	if err := econf.UnmarshalKey(c.name, &cfg); err != nil {
-		elog.Panic("UnmarshalKey fail", elog.String("name", c.name), elog.FieldErr(err))
-	}
-
 	cmp := &Component{
 		logger:  c.logger,
 		config:  c.config,
@@ -51,9 +42,9 @@ func (c *Container) Build(options ...BuildOption) *Component {
 	}
 
 	// 初始化默认Storage实例
-	if cfg.Bucket != "" {
+	if c.config.Bucket != "" {
 		// 如果根配置下设置了 bucket，则用此来初始化默认Storage
-		defaultBucketCfg := cfg.BucketConfig
+		defaultBucketCfg := c.config.BucketConfig
 		s, err := newStorage(defaultBucketCfg.Bucket, &defaultBucketCfg, c.logger.With(elog.String("bucket", defaultBucketCfg.Bucket)))
 		if err != nil {
 			elog.Panic("newStorage fail", elog.String("key", defaultBucketCfg.Bucket), elog.FieldErr(err))
@@ -66,13 +57,13 @@ func (c *Container) Build(options ...BuildOption) *Component {
 	}
 
 	// 初始化其他Storage实例
-	for bucketKey, bucketCfg := range cfg.Buckets {
+	for bucketKey, bucketCfg := range c.config.Buckets {
 		key := c.name + ".buckets." + bucketKey
 		if bucketCfg.Bucket == "" {
 			elog.Panic("Single bucket name can't be empty", elog.String("key", key), elog.String("invalidBucketName", key+".bucket"))
 		}
 
-		singleBucketCfg := cfg.BucketConfig
+		singleBucketCfg := c.config.BucketConfig
 		if err := econf.UnmarshalKey(key, &singleBucketCfg); err != nil {
 			elog.Panic("Single bucket unmarshalKey fail", elog.String("key", key), elog.FieldErr(err))
 		}
