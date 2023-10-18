@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"strings"
@@ -118,7 +119,7 @@ func newStorage(name string, cfg *BucketConfig, logger *elog.Component) (Client,
 		config.HTTPClient = &http.Client{
 			Timeout: time.Second * time.Duration(cfg.S3HttpTimeoutSecs),
 		}
-		var tp = http.DefaultTransport
+		var tp http.RoundTripper = createTransport(cfg)
 		if cfg.EnableMetricInterceptor {
 			tp = metricInterceptor(name, cfg, logger, tp)
 		}
@@ -167,5 +168,24 @@ func newStorage(name string, cfg *BucketConfig, logger *elog.Component) (Client,
 		return s3Client, nil
 	} else {
 		return nil, fmt.Errorf("unknown StorageType:\"%s\", only supports oss,s3", cfg.StorageType)
+	}
+}
+
+func createTransport(config *BucketConfig) *http.Transport {
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+
+	return &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           dialer.DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          config.MaxIdleConns,
+		IdleConnTimeout:       config.IdleConnTimeout,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		DisableKeepAlives:     !config.EnableKeepAlives,
+		MaxIdleConnsPerHost:   config.MaxIdleConnsPerHost,
 	}
 }
