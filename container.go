@@ -20,6 +20,10 @@ func DefaultContainer() *Container {
 
 func Load(key string) *Container {
 	c := DefaultContainer()
+	if err := econf.UnmarshalKey(key, &c.config.BucketConfig); err != nil {
+		c.logger.Panic("parse config error", elog.FieldErr(err), elog.FieldKey(key))
+		return c
+	}
 	if err := econf.UnmarshalKey(key, &c.config); err != nil {
 		c.logger.Panic("parse config error", elog.FieldErr(err), elog.FieldKey(key))
 		return c
