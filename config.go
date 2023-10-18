@@ -1,5 +1,10 @@
 package eos
 
+import (
+	"runtime"
+	"time"
+)
+
 type config struct {
 	// BucketConfig 全局默认配置
 	BucketConfig `mapstructure:",squash"`
@@ -45,6 +50,14 @@ type BucketConfig struct {
 	CompressType string
 	// CompressLimit 大于该值之后才压缩 单位字节
 	CompressLimit int64
+	// MaxIdleConns 设置最大空闲连接数
+	MaxIdleConns int
+	// MaxIdleConnsPerHost 设置长连接个数
+	MaxIdleConnsPerHost int
+	// EnableKeepAlives 是否开启长连接，默认打开
+	EnableKeepAlives bool
+	// IdleConnTimeout 设置空闲连接时间，默认90 * time.Second
+	IdleConnTimeout time.Duration
 }
 
 // DefaultConfig 返回默认配置
@@ -54,5 +67,9 @@ func DefaultConfig() *config {
 		S3HttpTimeoutSecs:       60,
 		EnableTraceInterceptor:  true,
 		EnableMetricInterceptor: true,
+		EnableKeepAlives:        true,
+		IdleConnTimeout:         90 * time.Second,
+		MaxIdleConnsPerHost:     runtime.GOMAXPROCS(0) + 1,
+		MaxIdleConns:            100,
 	}}
 }

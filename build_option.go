@@ -1,5 +1,9 @@
 package eos
 
+import (
+	"time"
+)
+
 type BuildOption func(c *Container)
 
 func WithDebug(debug bool) BuildOption {
@@ -65,5 +69,29 @@ func WithSSL(ssl bool) BuildOption {
 func WithS3HttpTimeoutSecs(s3HttpTimeoutSecs int64) BuildOption {
 	return func(c *Container) {
 		c.config.S3HttpTimeoutSecs = s3HttpTimeoutSecs
+	}
+}
+
+func WithMaxIdleConnsPerHost(maxIdleConnsPerHost int) BuildOption {
+	return func(c *Container) {
+		c.config.MaxIdleConnsPerHost = maxIdleConnsPerHost
+	}
+}
+
+func WithMaxIdleConns(maxIdleConns int) BuildOption {
+	return func(c *Container) {
+		c.config.MaxIdleConns = maxIdleConns
+	}
+}
+
+func WithKeepAlives(enableKeepAlives bool) BuildOption {
+	return func(c *Container) {
+		c.config.EnableKeepAlives = enableKeepAlives
+	}
+}
+
+func WithIdleConnTimeout(idleConnTimeout time.Duration) BuildOption {
+	return func(c *Container) {
+		c.config.IdleConnTimeout = idleConnTimeout
 	}
 }
