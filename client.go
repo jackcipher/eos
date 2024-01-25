@@ -46,114 +46,124 @@ type Client interface {
 
 func newStorage(name string, cfg *BucketConfig, logger *elog.Component) (Client, error) {
 	storageType := strings.ToLower(cfg.StorageType)
+	switch storageType {
+	case StorageTypeOSS:
+		return newOSS(name, cfg, logger)
+	case StorageTypeS3:
+		return newS3(name, cfg, logger)
+	case StorageTypeFile:
+		return NewLocalFile(cfg.Endpoint)
+	default:
+		return nil, fmt.Errorf("unknown StorageType:\"%s\", only supports oss,s3", cfg.StorageType)
+	}
+}
 
-	if storageType == StorageTypeOSS {
-		var opts = []oss.ClientOption{oss.HTTPClient(newHttpClient(name, cfg, logger))}
-		if cfg.Debug {
-			opts = append(opts, oss.SetLogLevel(oss.Debug))
+func newS3(name string, cfg *BucketConfig, logger *elog.Component) (Client, error) {
+	var config *aws.Config
+
+	// use minio
+	if cfg.S3ForcePathStyle {
+		config = &aws.Config{
+			Region:           aws.String(cfg.Region),
+			DisableSSL:       aws.Bool(!cfg.SSL),
+			Credentials:      credentials.NewStaticCredentials(cfg.AccessKeyID, cfg.AccessKeySecret, ""),
+			Endpoint:         aws.String(cfg.Endpoint),
+			S3ForcePathStyle: aws.Bool(true),
 		}
-		client, err := oss.New(cfg.Endpoint, cfg.AccessKeyID, cfg.AccessKeySecret, opts...)
+	} else {
+		config = &aws.Config{
+			Region:      aws.String(cfg.Region),
+			DisableSSL:  aws.Bool(!cfg.SSL),
+			Credentials: credentials.NewStaticCredentials(cfg.AccessKeyID, cfg.AccessKeySecret, ""),
+		}
+		if cfg.Endpoint != "" {
+			config.Endpoint = aws.String(cfg.Endpoint)
+		}
+	}
+	if cfg.Debug {
+		config.LogLevel = aws.LogLevel(aws.LogDebugWithHTTPBody | aws.LogDebugWithSigning)
+		slog.Default().Enabled(context.Background(), slog.LevelDebug)
+	}
+
+	config.HTTPClient = newHttpClient(name, cfg, logger)
+	service := s3.New(session.Must(session.NewSession(config)))
+
+	var s3Client *S3
+	if cfg.Shards != nil && len(cfg.Shards) > 0 {
+		buckets := make(map[string]string)
+		for _, v := range cfg.Shards {
+			for i := 0; i < len(v); i++ {
+				buckets[strings.ToLower(v[i:i+1])] = cfg.Bucket + "-" + v
+			}
+		}
+		s3Client = &S3{
+			ShardsBucket: buckets,
+			client:       service,
+		}
+	} else {
+		s3Client = &S3{
+			BucketName: cfg.Bucket,
+			client:     service,
+		}
+	}
+	s3Client.cfg = cfg
+	if cfg.EnableCompressor {
+		// 目前仅支持 gzip
+		if comp, ok := compressors[cfg.CompressType]; ok {
+			s3Client.compressor = comp
+		} else {
+			logger.Warn("unknown type", elog.String("name", cfg.CompressType))
+		}
+	}
+	return s3Client, nil
+}
+
+func newOSS(name string, cfg *BucketConfig, logger *elog.Component) (Client, error) {
+	var opts = []oss.ClientOption{oss.HTTPClient(newHttpClient(name, cfg, logger))}
+	if cfg.Debug {
+		opts = append(opts, oss.SetLogLevel(oss.Debug))
+	}
+	client, err := oss.New(cfg.Endpoint, cfg.AccessKeyID, cfg.AccessKeySecret, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	var ossClient *OSS
+	if cfg.Shards != nil && len(cfg.Shards) > 0 {
+		buckets := make(map[string]*oss.Bucket)
+		for _, v := range cfg.Shards {
+			bucket, err := client.Bucket(cfg.Bucket + "-" + v)
+			if err != nil {
+				return nil, err
+			}
+			for i := 0; i < len(v); i++ {
+				buckets[strings.ToLower(v[i:i+1])] = bucket
+			}
+		}
+
+		ossClient = &OSS{
+			Shards: buckets,
+		}
+	} else {
+		bucket, err := client.Bucket(cfg.Bucket)
 		if err != nil {
 			return nil, err
 		}
 
-		var ossClient *OSS
-		if cfg.Shards != nil && len(cfg.Shards) > 0 {
-			buckets := make(map[string]*oss.Bucket)
-			for _, v := range cfg.Shards {
-				bucket, err := client.Bucket(cfg.Bucket + "-" + v)
-				if err != nil {
-					return nil, err
-				}
-				for i := 0; i < len(v); i++ {
-					buckets[strings.ToLower(v[i:i+1])] = bucket
-				}
-			}
-
-			ossClient = &OSS{
-				Shards: buckets,
-			}
-		} else {
-			bucket, err := client.Bucket(cfg.Bucket)
-			if err != nil {
-				return nil, err
-			}
-
-			ossClient = &OSS{
-				Bucket: bucket,
-			}
+		ossClient = &OSS{
+			Bucket: bucket,
 		}
-		ossClient.cfg = cfg
-		if cfg.EnableCompressor {
-			// 目前仅支持 gzip
-			if comp, ok := compressors[cfg.CompressType]; ok {
-				ossClient.compressor = comp
-			} else {
-				logger.Warn("unknown type", elog.String("name", cfg.CompressType))
-			}
-		}
-		return ossClient, nil
-	} else if storageType == StorageTypeS3 {
-		var config *aws.Config
-
-		// use minio
-		if cfg.S3ForcePathStyle {
-			config = &aws.Config{
-				Region:           aws.String(cfg.Region),
-				DisableSSL:       aws.Bool(!cfg.SSL),
-				Credentials:      credentials.NewStaticCredentials(cfg.AccessKeyID, cfg.AccessKeySecret, ""),
-				Endpoint:         aws.String(cfg.Endpoint),
-				S3ForcePathStyle: aws.Bool(true),
-			}
-		} else {
-			config = &aws.Config{
-				Region:      aws.String(cfg.Region),
-				DisableSSL:  aws.Bool(!cfg.SSL),
-				Credentials: credentials.NewStaticCredentials(cfg.AccessKeyID, cfg.AccessKeySecret, ""),
-			}
-			if cfg.Endpoint != "" {
-				config.Endpoint = aws.String(cfg.Endpoint)
-			}
-		}
-		if cfg.Debug {
-			config.LogLevel = aws.LogLevel(aws.LogDebugWithHTTPBody | aws.LogDebugWithSigning)
-			slog.Default().Enabled(context.Background(), slog.LevelDebug)
-		}
-
-		config.HTTPClient = newHttpClient(name, cfg, logger)
-		service := s3.New(session.Must(session.NewSession(config)))
-
-		var s3Client *S3
-		if cfg.Shards != nil && len(cfg.Shards) > 0 {
-			buckets := make(map[string]string)
-			for _, v := range cfg.Shards {
-				for i := 0; i < len(v); i++ {
-					buckets[strings.ToLower(v[i:i+1])] = cfg.Bucket + "-" + v
-				}
-			}
-			s3Client = &S3{
-				ShardsBucket: buckets,
-				client:       service,
-			}
-		} else {
-			s3Client = &S3{
-				BucketName: cfg.Bucket,
-				client:     service,
-			}
-		}
-		s3Client.cfg = cfg
-		if cfg.EnableCompressor {
-			// 目前仅支持 gzip
-			if comp, ok := compressors[cfg.CompressType]; ok {
-				s3Client.compressor = comp
-			} else {
-				logger.Warn("unknown type", elog.String("name", cfg.CompressType))
-			}
-		}
-		return s3Client, nil
-	} else {
-		return nil, fmt.Errorf("unknown StorageType:\"%s\", only supports oss,s3", cfg.StorageType)
 	}
+	ossClient.cfg = cfg
+	if cfg.EnableCompressor {
+		// 目前仅支持 gzip
+		if comp, ok := compressors[cfg.CompressType]; ok {
+			ossClient.compressor = comp
+		} else {
+			logger.Warn("unknown type", elog.String("name", cfg.CompressType))
+		}
+	}
+	return ossClient, nil
 }
 
 func newHttpClient(name string, cfg *BucketConfig, logger *elog.Component) *http.Client {
