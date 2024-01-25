@@ -31,7 +31,7 @@ var (
 
 var s3Confs = `
 [eos.s3]
-debug = false
+debug = true
 storageType = "s3"
 s3HttpTransportMaxConnsPerHost = 100
 s3HttpTransportIdleConnTimeout = "90s"
@@ -224,7 +224,17 @@ func TestS3_ListObject(t *testing.T) {
 	err := awsCmp.Put(ctx, S3Guid, strings.NewReader(S3Content), nil)
 	assert.NoError(t, err)
 
-	res, err := awsCmp.ListObject(ctx, S3Guid, S3Guid[0:4], "", 10, "")
+	err = awsCmp.Put(ctx, S3Guid+"-1", strings.NewReader(S3Content), nil)
+	assert.NoError(t, err)
+
+	err = awsCmp.Put(ctx, S3Guid+"-2", strings.NewReader(S3Content), nil)
+	assert.NoError(t, err)
+
+	err = awsCmp.Put(ctx, S3Guid+"-3", strings.NewReader(S3Content), nil)
+	assert.NoError(t, err)
+
+	res, err := awsCmp.ListObject(ctx, "", S3Guid, S3Guid+"-1", 10, "")
+	t.Log("res info", res)
 	assert.NoError(t, err)
 	assert.NotEqual(t, 0, len(res))
 }

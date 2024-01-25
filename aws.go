@@ -419,11 +419,13 @@ func (a *S3) ListObject(ctx context.Context, key string, prefix string, marker s
 	input := &s3.ListObjectsInput{
 		Bucket: aws.String(bucketName),
 	}
+	input.Prefix = aws.String(a.cfg.Prefix)
 	if prefix != "" {
 		input.Prefix = aws.String(a.cfg.Prefix + prefix)
 	}
+	input.Marker = aws.String(a.cfg.Prefix)
 	if marker != "" {
-		input.Marker = aws.String(marker)
+		input.Marker = aws.String(a.cfg.Prefix + marker)
 	}
 	if maxKeys > 0 {
 		input.MaxKeys = aws.Int64(int64(maxKeys))
