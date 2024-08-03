@@ -47,7 +47,7 @@ type BucketConfig struct {
 	// EnableClientTrace
 	EnableClientTrace bool
 	// EnableCompressor
-	EnableCompressor bool
+	//EnableCompressor bool
 	// CompressType gzip
 	CompressType string
 	// CompressLimit 大于该值之后才压缩 单位字节

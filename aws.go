@@ -6,14 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"strings"
 	"time"
 
 	"github.com/avast/retry-go"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/golang/snappy"
 )
 
@@ -22,9 +21,10 @@ var _ Client = (*S3)(nil)
 type S3 struct {
 	ShardsBucket map[string]string
 	BucketName   string
-	client       *s3.S3
+	client       *s3.Client
 	cfg          *BucketConfig
-	compressor   Compressor
+	//compressor    Compressor
+	presignClient *s3.PresignClient
 }
 
 // 返回带prefix的key
@@ -55,8 +55,9 @@ func (a *S3) Copy(ctx context.Context, srcKey, dstKey string, options ...CopyOpt
 		Key:        aws.String(dstKey),
 	}
 	if cfg.metaKeysToCopy != nil || cfg.meta != nil {
-		input.SetMetadataDirective("REPLACE")
-		input.Metadata = make(map[string]*string)
+		// todo 这里要看下
+		//input.SetMetadataDirective("REPLACE")
+		input.Metadata = make(map[string]string)
 		cfg.metaKeysToCopy = append(cfg.metaKeysToCopy, "Content-Encoding") // always copy content-encoding
 		metadata, err := a.Head(ctx, srcKey, cfg.metaKeysToCopy)
 		if err != nil {
@@ -68,15 +69,15 @@ func (a *S3) Copy(ctx context.Context, srcKey, dstKey string, options ...CopyOpt
 					input.ContentEncoding = aws.String(v)
 					continue
 				}
-				input.Metadata[k] = aws.String(v)
+				input.Metadata[k] = v
 			}
 		}
 		// specify new metadata
 		for k, v := range cfg.meta {
-			input.Metadata[k] = aws.String(v)
+			input.Metadata[k] = v
 		}
 	}
-	_, err = a.client.CopyObjectWithContext(ctx, input)
+	_, err = a.client.CopyObject(ctx, input)
 	if err != nil {
 		return err
 	}
@@ -107,7 +108,7 @@ func (a *S3) getBucketAndKey(ctx context.Context, key string) (string, string, e
 func (a *S3) GetAsReader(ctx context.Context, key string, options ...GetOptions) (io.ReadCloser, error) {
 	bucketName, key, err := a.getBucketAndKey(ctx, key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("GetAsReader getBucketAndKey fail, err: %w", err)
 	}
 
 	input := &s3.GetObjectInput{
@@ -116,17 +117,24 @@ func (a *S3) GetAsReader(ctx context.Context, key string, options ...GetOptions)
 	}
 	setS3Options(ctx, options, input)
 
-	result, err := a.client.GetObjectWithContext(ctx, input)
+	result, err := a.client.GetObject(ctx, input)
 	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok {
-			if aerr.Code() == s3.ErrCodeNoSuchKey {
-				return nil, nil
-			}
+		// todo 这里要处理 no such key
+		//if aerr, ok := err.(awserr.Error); ok {
+		//	if aerr.Code() == s3.ErrCodeNoSuchKey {
+		//		return nil, nil
+		//	}
+		//}
+		// https://aws.github.io/aws-sdk-go-v2/docs/migrating/
+		var nsk *types.NoSuchKey
+		if errors.As(err, &nsk) {
+			// handle NoSuchKey error
+			return nil, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("GetAsReader GetObject fail, err: %w", err)
 	}
 
-	return result.Body, err
+	return result.Body, nil
 }
 
 // GetWithMeta don't forget to call the close() method of the io.ReadCloser
@@ -142,14 +150,21 @@ func (a *S3) GetWithMeta(ctx context.Context, key string, attributes []string, o
 	}
 	setS3Options(ctx, options, input)
 
-	result, err := a.client.GetObjectWithContext(ctx, input)
+	result, err := a.client.GetObject(ctx, input)
 	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok {
-			if aerr.Code() == s3.ErrCodeNoSuchKey {
-				return nil, nil, nil
-			}
+		// todo 这里要处理 no such key
+		//if aerr, ok := err.(awserr.Error); ok {
+		//	if aerr.Code() == s3.ErrCodeNoSuchKey {
+		//		return nil, nil, nil
+		//	}
+		//}
+		// https://aws.github.io/aws-sdk-go-v2/docs/migrating/
+		var nsk *types.NoSuchKey
+		if errors.As(err, &nsk) {
+			// handle NoSuchKey error
+			return nil, nil, nil
 		}
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("GetWithMeta GetObject fail, err: %w", err)
 	}
 	return result.Body, getS3Meta(ctx, attributes, mergeHttpStandardHeaders(&HeadGetObjectOutputWrapper{
 		getObjectOutput: result,
@@ -180,7 +195,7 @@ func (a *S3) GetBytes(ctx context.Context, key string, options ...GetOptions) ([
 		}
 	}()
 
-	return ioutil.ReadAll(body)
+	return io.ReadAll(body)
 }
 
 func (a *S3) Range(ctx context.Context, key string, offset int64, length int64) (io.ReadCloser, error) {
@@ -194,7 +209,7 @@ func (a *S3) Range(ctx context.Context, key string, offset int64, length int64) 
 		Key:    aws.String(key),
 		Range:  &readRange,
 	}
-	r, err := a.client.GetObjectWithContext(ctx, input)
+	r, err := a.client.GetObject(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -218,9 +233,9 @@ func (a *S3) GetAndDecompress(ctx context.Context, key string) (string, error) {
 	}()
 
 	compressor := result.Metadata["Compressor"]
-	if compressor != nil {
-		if *compressor != "snappy" {
-			return "", errors.New("GetAndDecompress only supports snappy for now, got " + *compressor)
+	if compressor != "" {
+		if compressor != "snappy" {
+			return "", errors.New("GetAndDecompress only supports snappy for now, got " + compressor)
 		}
 
 		rawBytes, err := io.ReadAll(body)
@@ -245,7 +260,7 @@ func (a *S3) GetAndDecompress(ctx context.Context, key string) (string, error) {
 		return string(decodedBytes), nil
 	}
 
-	data, err := ioutil.ReadAll(body)
+	data, err := io.ReadAll(body)
 	if err != nil {
 		return "", err
 	}
@@ -258,10 +273,10 @@ func (a *S3) GetAndDecompressAsReader(ctx context.Context, key string) (io.ReadC
 		return nil, err
 	}
 
-	return ioutil.NopCloser(strings.NewReader(result)), nil
+	return io.NopCloser(strings.NewReader(result)), nil
 }
 
-func (a *S3) Put(ctx context.Context, key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error {
+func (a *S3) Put(ctx context.Context, key string, reader io.Reader, meta map[string]string, options ...PutOptions) error {
 	bucketName, key, err := a.getBucketAndKey(ctx, key)
 	if err != nil {
 		return err
@@ -274,7 +289,7 @@ func (a *S3) Put(ctx context.Context, key string, reader io.ReadSeeker, meta map
 		Body:        reader,
 		Bucket:      aws.String(bucketName),
 		Key:         aws.String(key),
-		Metadata:    aws.StringMap(meta),
+		Metadata:    meta,
 		ContentType: aws.String(putOptions.contentType),
 	}
 	if putOptions.contentEncoding != nil {
@@ -289,29 +304,30 @@ func (a *S3) Put(ctx context.Context, key string, reader io.ReadSeeker, meta map
 	if putOptions.expires != nil {
 		input.Expires = putOptions.expires
 	}
-	if a.compressor != nil {
-		wrapReader, l, err := WrapReader(input.Body)
-		if err != nil {
-			return err
-		}
-		if l > a.cfg.CompressLimit {
-			input.Body, _, err = a.compressor.Compress(wrapReader)
-			if err != nil {
-				return err
-			}
-			encoding := a.compressor.ContentEncoding()
-			input.ContentEncoding = &encoding
-		} else {
-			input.Body = wrapReader
-		}
-	}
+	// todo 这里有性能问题，不能这么玩
+	//if a.compressor != nil {
+	//	wrapReader, l, err := WrapReader(input.Body)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	if l > a.cfg.CompressLimit {
+	//		input.Body, _, err = a.compressor.Compress(wrapReader)
+	//		if err != nil {
+	//			return err
+	//		}
+	//		encoding := a.compressor.ContentEncoding()
+	//		input.ContentEncoding = &encoding
+	//	} else {
+	//		input.Body = wrapReader
+	//	}
+	//}
 
 	err = retry.Do(func() error {
-		_, err := a.client.PutObjectWithContext(ctx, input)
+		_, err := a.client.PutObject(ctx, input)
 		if err != nil && reader != nil {
 			// Reset the body reader after the request since at this point it's already read
 			// Note that it's safe to ignore the error here since the 0,0 position is always valid
-			_, _ = reader.Seek(0, 0)
+			//_, _ = reader.Seek(0, 0)
 		}
 		return err
 	}, retry.Attempts(3), retry.Delay(1*time.Second))
@@ -319,8 +335,8 @@ func (a *S3) Put(ctx context.Context, key string, reader io.ReadSeeker, meta map
 	return err
 }
 
-func (a *S3) PutAndCompress(ctx context.Context, key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error {
-	data, err := ioutil.ReadAll(reader)
+func (a *S3) PutAndCompress(ctx context.Context, key string, reader io.Reader, meta map[string]string, options ...PutOptions) error {
+	data, err := io.ReadAll(reader)
 	if err != nil {
 		return err
 	}
@@ -345,7 +361,7 @@ func (a *S3) Del(ctx context.Context, key string) error {
 		Key:    aws.String(key),
 	}
 
-	_, err = a.client.DeleteObjectWithContext(ctx, input)
+	_, err = a.client.DeleteObject(ctx, input)
 	return err
 }
 
@@ -360,23 +376,23 @@ func (a *S3) DelMulti(ctx context.Context, keys []string) error {
 	}
 
 	for bucketName, BKeys := range bucketsNameKeys {
-		delObjects := make([]*s3.ObjectIdentifier, len(BKeys))
+		delObjects := make([]types.ObjectIdentifier, len(BKeys))
 
 		for idx, key := range BKeys {
-			delObjects[idx] = &s3.ObjectIdentifier{
+			delObjects[idx] = types.ObjectIdentifier{
 				Key: aws.String(key),
 			}
 		}
 
 		input := &s3.DeleteObjectsInput{
 			Bucket: aws.String(bucketName),
-			Delete: &s3.Delete{
+			Delete: &types.Delete{
 				Objects: delObjects,
 				Quiet:   aws.Bool(false),
 			},
 		}
 
-		_, err := a.client.DeleteObjectsWithContext(ctx, input)
+		_, err := a.client.DeleteObjects(ctx, input)
 		if err != nil {
 			return err
 		}
@@ -396,13 +412,14 @@ func (a *S3) Head(ctx context.Context, key string, attributes []string) (map[str
 		Key:    aws.String(key),
 	}
 
-	result, err := a.client.HeadObjectWithContext(ctx, input)
+	result, err := a.client.HeadObject(ctx, input)
 	if err != nil {
-		if aerr, ok := err.(awserr.RequestFailure); ok {
-			if aerr.StatusCode() == 404 {
-				return nil, nil
-			}
-		}
+		// todo 这里要处理 404
+		//if aerr, ok := err.(awserr.RequestFailure); ok {
+		//	if aerr.StatusCode() == 404 {
+		//		return nil, nil
+		//	}
+		//}
 		return nil, err
 	}
 	return getS3Meta(ctx, attributes, mergeHttpStandardHeaders(&HeadGetObjectOutputWrapper{
@@ -428,13 +445,13 @@ func (a *S3) ListObject(ctx context.Context, key string, prefix string, marker s
 		input.Marker = aws.String(a.cfg.Prefix + marker)
 	}
 	if maxKeys > 0 {
-		input.MaxKeys = aws.Int64(int64(maxKeys))
+		input.MaxKeys = aws.Int32(int32(maxKeys))
 	}
 	if delimiter != "" {
 		input.Delimiter = aws.String(delimiter)
 	}
 
-	result, err := a.client.ListObjectsWithContext(ctx, input)
+	result, err := a.client.ListObjects(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -463,8 +480,14 @@ func (a *S3) SignURL(ctx context.Context, key string, expired int64, options ...
 	if signOptions.process != nil {
 		panic("process option is not supported for s3")
 	}
-	req, _ := a.client.GetObjectRequest(input)
-	return req.Presign(time.Duration(expired) * time.Second)
+	req, err := a.presignClient.PresignGetObject(ctx, input, func(options *s3.PresignOptions) {
+		options.Expires = time.Duration(expired) * time.Second
+	})
+	if err != nil {
+		return "", err
+	}
+	//return req.Presign(time.Duration(expired) * time.Second)
+	return req.URL, nil
 }
 
 func (a *S3) Exists(ctx context.Context, key string) (bool, error) {
@@ -477,16 +500,16 @@ func (a *S3) Exists(ctx context.Context, key string) (bool, error) {
 		Bucket: aws.String(bucketName),
 		Key:    aws.String(key),
 	}
-	_, err = a.client.HeadObjectWithContext(ctx, input)
+	_, err = a.client.HeadObject(ctx, input)
 	if err == nil {
 		return true, nil
 	}
-
-	if aerr, ok := err.(awserr.RequestFailure); ok {
-		if aerr.StatusCode() == 404 {
-			return false, nil
-		}
-	}
+	// todo 这里要处理 404
+	//if aerr, ok := err.(awserr.RequestFailure); ok {
+	//	if aerr.StatusCode() == 404 {
+	//		return false, nil
+	//	}
+	//}
 	return false, err
 }
 
@@ -501,13 +524,14 @@ func (a *S3) get(ctx context.Context, key string, options ...GetOptions) (*s3.Ge
 		Key:    aws.String(key),
 	}
 	setS3Options(ctx, options, input)
-	result, err := a.client.GetObjectWithContext(ctx, input)
+	result, err := a.client.GetObject(ctx, input)
 	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok {
-			if aerr.Code() == s3.ErrCodeNoSuchKey {
-				return nil, nil
-			}
-		}
+		// todo 这里要处理 404
+		//if aerr, ok := err.(awserr.Error); ok {
+		//	if aerr.Code() == s3.ErrCodeNoSuchKey {
+		//		return nil, nil
+		//	}
+		//}
 		return nil, err
 	}
 
@@ -515,7 +539,7 @@ func (a *S3) get(ctx context.Context, key string, options ...GetOptions) (*s3.Ge
 }
 
 func getS3Meta(ctx context.Context, attributes []string, metaData map[string]*string) map[string]string {
-	// https://github.com/aws/aws-sdk-go/issues/445
+	// https://github.com/aws/aws-sdk-go-v2/issues/445
 	// aws 会将 meta 的首字母大写，在这里需要转换下
 	res := make(map[string]string)
 	for _, v := range attributes {
