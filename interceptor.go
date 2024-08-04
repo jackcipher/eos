@@ -121,10 +121,10 @@ func metricInterceptor(name string, config *BucketConfig, logger *elog.Component
 		} else {
 			code = http.StatusText(res.StatusCode)
 		}
-		emetric.ClientHandleCounter.Inc("oss", name, r.Method, config.Bucket, code)
+		emetric.ClientHandleCounter.Inc("eos", name, r.Method, config.Bucket, code)
 	}
 	t.onEnd = func(r *http.Request, res *http.Response, err error) {
-		emetric.ClientHandleHistogram.Observe(time.Since(beg(r.Context())).Seconds(), "oss", name, r.Method, config.Bucket)
+		emetric.ClientHandleHistogram.Observe(time.Since(beg(r.Context())).Seconds(), "eos", name, r.Method, config.Bucket)
 	}
 	return t
 }

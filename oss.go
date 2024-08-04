@@ -291,7 +291,13 @@ func (ossClient *OSS) Put(ctx context.Context, key string, reader io.Reader, met
 }
 
 func (ossClient *OSS) PutAndCompress(ctx context.Context, key string, reader io.Reader, meta map[string]string, options ...PutOptions) error {
-	data, err := io.ReadAll(reader)
+	//data, err := io.ReadAll(reader)
+	//if err != nil {
+	//	return err
+	//}
+
+	var buf bytes.Buffer
+	_, err := io.Copy(&buf, reader)
 	if err != nil {
 		return err
 	}
@@ -299,7 +305,7 @@ func (ossClient *OSS) PutAndCompress(ctx context.Context, key string, reader io.
 		meta = make(map[string]string)
 	}
 
-	encodedBytes := snappy.Encode(nil, data)
+	encodedBytes := snappy.Encode(nil, buf.Bytes())
 	meta["Compressor"] = "snappy"
 
 	return ossClient.Put(ctx, key, bytes.NewReader(encodedBytes), meta, options...)

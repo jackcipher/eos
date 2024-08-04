@@ -194,8 +194,9 @@ func (a *S3) GetBytes(ctx context.Context, key string, options ...GetOptions) ([
 			body.Close()
 		}
 	}()
-
-	return io.ReadAll(body)
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, body)
+	return buf.Bytes(), err
 }
 
 func (a *S3) Range(ctx context.Context, key string, offset int64, length int64) (io.ReadCloser, error) {
@@ -231,22 +232,22 @@ func (a *S3) GetAndDecompress(ctx context.Context, key string) (string, error) {
 			body.Close()
 		}
 	}()
-
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, body)
+	if err != nil {
+		return "", err
+	}
 	compressor := result.Metadata["Compressor"]
 	if compressor != "" {
 		if compressor != "snappy" {
 			return "", errors.New("GetAndDecompress only supports snappy for now, got " + compressor)
 		}
 
-		rawBytes, err := io.ReadAll(body)
-		if err != nil {
-			return "", err
-		}
-
-		decodedBytes, err := snappy.Decode(nil, rawBytes)
+		//rawBytes, err := io.ReadAll(body)
+		decodedBytes, err := snappy.Decode(nil, buf.Bytes())
 		if err != nil {
 			if errors.Is(err, snappy.ErrCorrupt) {
-				reader := snappy.NewReader(bytes.NewReader(rawBytes))
+				reader := snappy.NewReader(bytes.NewReader(buf.Bytes()))
 				data, err := io.ReadAll(reader)
 				if err != nil {
 					return "", err
@@ -259,12 +260,12 @@ func (a *S3) GetAndDecompress(ctx context.Context, key string) (string, error) {
 
 		return string(decodedBytes), nil
 	}
-
-	data, err := io.ReadAll(body)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
+	//
+	//data, err := io.ReadAll(body)
+	//if err != nil {
+	//	return "", err
+	//}
+	return buf.String(), nil
 }
 
 func (a *S3) GetAndDecompressAsReader(ctx context.Context, key string) (io.ReadCloser, error) {
@@ -336,7 +337,12 @@ func (a *S3) Put(ctx context.Context, key string, reader io.Reader, meta map[str
 }
 
 func (a *S3) PutAndCompress(ctx context.Context, key string, reader io.Reader, meta map[string]string, options ...PutOptions) error {
-	data, err := io.ReadAll(reader)
+	//data, err := io.ReadAll(reader)
+	//if err != nil {
+	//	return err
+	//}
+	var buf bytes.Buffer
+	_, err := io.Copy(&buf, reader)
 	if err != nil {
 		return err
 	}
@@ -344,7 +350,7 @@ func (a *S3) PutAndCompress(ctx context.Context, key string, reader io.Reader, m
 		meta = make(map[string]string)
 	}
 
-	encodedBytes := snappy.Encode(nil, data)
+	encodedBytes := snappy.Encode(nil, buf.Bytes())
 	meta["Compressor"] = "snappy"
 
 	return a.Put(ctx, key, bytes.NewReader(encodedBytes), meta, options...)

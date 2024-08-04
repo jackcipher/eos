@@ -1,6 +1,7 @@
 package eos
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -52,7 +53,9 @@ func (l *LocalFile) GetBytes(ctx context.Context, key string, options ...GetOpti
 		return nil, err
 	}
 	defer rd.Close()
-	return io.ReadAll(rd)
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, rd)
+	return buf.Bytes(), err
 }
 
 // GetAsReader returns reader which you need to close it.
