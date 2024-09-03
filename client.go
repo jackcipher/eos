@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptrace"
@@ -12,16 +11,15 @@ import (
 	"time"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/gotomicro/ego/core/elog"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
-const PackageName = "component.eoss"
+const PackageName = "component.eos"
 
 // Client object storage client interface
 type Client interface {
@@ -32,8 +30,8 @@ type Client interface {
 	GetWithMeta(ctx context.Context, key string, attributes []string, options ...GetOptions) (io.ReadCloser, map[string]string, error)
 	GetAndDecompress(ctx context.Context, key string) (string, error)
 	GetAndDecompressAsReader(ctx context.Context, key string) (io.ReadCloser, error)
-	Put(ctx context.Context, key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error
-	PutAndCompress(ctx context.Context, key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error
+	Put(ctx context.Context, key string, reader io.Reader, meta map[string]string, options ...PutOptions) error
+	PutAndCompress(ctx context.Context, key string, reader io.Reader, meta map[string]string, options ...PutOptions) error
 	Del(ctx context.Context, key string) error
 	DelMulti(ctx context.Context, keys []string) error
 	Head(ctx context.Context, key string, meta []string) (map[string]string, error)
@@ -59,34 +57,46 @@ func newStorage(name string, cfg *BucketConfig, logger *elog.Component) (Client,
 }
 
 func newS3(name string, cfg *BucketConfig, logger *elog.Component) (Client, error) {
-	var config *aws.Config
-
+	awsConfig := aws.Config{
+		//BaseEndpoint: aws.String(cfg.Endpoint),
+		Region: cfg.Region,
+		//DisableSSL:  aws.Bool(!cfg.SSL),
+		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.AccessKeySecret, "")),
+		//Endpoint:         aws.String(cfg.Endpoint),
+		//S3ForcePathStyle: aws.Bool(true),
+	}
+	if cfg.Endpoint != "" {
+		awsConfig.BaseEndpoint = aws.String(cfg.Endpoint)
+	}
 	// use minio
-	if cfg.S3ForcePathStyle {
-		config = &aws.Config{
-			Region:           aws.String(cfg.Region),
-			DisableSSL:       aws.Bool(!cfg.SSL),
-			Credentials:      credentials.NewStaticCredentials(cfg.AccessKeyID, cfg.AccessKeySecret, ""),
-			Endpoint:         aws.String(cfg.Endpoint),
-			S3ForcePathStyle: aws.Bool(true),
-		}
-	} else {
-		config = &aws.Config{
-			Region:      aws.String(cfg.Region),
-			DisableSSL:  aws.Bool(!cfg.SSL),
-			Credentials: credentials.NewStaticCredentials(cfg.AccessKeyID, cfg.AccessKeySecret, ""),
-		}
-		if cfg.Endpoint != "" {
-			config.Endpoint = aws.String(cfg.Endpoint)
-		}
-	}
+	//if cfg.S3ForcePathStyle {
+	//	awsConfig = aws.Config{
+	//		BaseEndpoint: aws.String(cfg.Endpoint),
+	//		Region:      cfg.Region,
+	//		//DisableSSL:  aws.Bool(!cfg.SSL),
+	//		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.AccessKeySecret, ""),
+	//		//Endpoint:         aws.String(cfg.Endpoint),
+	//		S3ForcePathStyle: aws.Bool(true),
+	//	}
+	//} else {
+	//	awsConfig = aws.Config{
+	//		Region:      aws.String(cfg.Region),
+	//		DisableSSL:  aws.Bool(!cfg.SSL),
+	//		Credentials: credentials.NewStaticCredentials(cfg.AccessKeyID, cfg.AccessKeySecret, ""),
+	//	}
+	//	if cfg.Endpoint != "" {
+	//		config.Endpoint = aws.String(cfg.Endpoint)
+	//	}
+	//}
 	if cfg.Debug {
-		config.LogLevel = aws.LogLevel(aws.LogDebugWithHTTPBody | aws.LogDebugWithSigning)
-		slog.Default().Enabled(context.Background(), slog.LevelDebug)
+		//awsConfig.Logger = elog.EgoLogger
+		//slog.Default().Enabled(context.Background(), slog.LevelDebug)
 	}
 
-	config.HTTPClient = newHttpClient(name, cfg, logger)
-	service := s3.New(session.Must(session.NewSession(config)))
+	awsConfig.HTTPClient = newHttpClient(name, cfg, logger)
+	service := s3.NewFromConfig(awsConfig, func(o *s3.Options) {
+		o.UsePathStyle = cfg.S3ForcePathStyle
+	})
 
 	var s3Client *S3
 	if cfg.Shards != nil && len(cfg.Shards) > 0 {
@@ -107,14 +117,17 @@ func newS3(name string, cfg *BucketConfig, logger *elog.Component) (Client, erro
 		}
 	}
 	s3Client.cfg = cfg
-	if cfg.EnableCompressor {
-		// 目前仅支持 gzip
-		if comp, ok := compressors[cfg.CompressType]; ok {
-			s3Client.compressor = comp
-		} else {
-			logger.Warn("unknown type", elog.String("name", cfg.CompressType))
-		}
-	}
+	//if cfg.EnableCompressor {
+	//	// 目前仅支持 gzip
+	//	if comp, ok := compressors[cfg.CompressType]; ok {
+	//		s3Client.compressor = comp
+	//	} else {
+	//		logger.Warn("unknown type", elog.String("name", cfg.CompressType))
+	//	}
+	//}
+
+	s3Client.presignClient = s3.NewPresignClient(service)
+
 	return s3Client, nil
 }
 
@@ -155,14 +168,14 @@ func newOSS(name string, cfg *BucketConfig, logger *elog.Component) (Client, err
 		}
 	}
 	ossClient.cfg = cfg
-	if cfg.EnableCompressor {
-		// 目前仅支持 gzip
-		if comp, ok := compressors[cfg.CompressType]; ok {
-			ossClient.compressor = comp
-		} else {
-			logger.Warn("unknown type", elog.String("name", cfg.CompressType))
-		}
-	}
+	//if cfg.EnableCompressor {
+	//	// 目前仅支持 gzip
+	//	if comp, ok := compressors[cfg.CompressType]; ok {
+	//		ossClient.compressor = comp
+	//	} else {
+	//		logger.Warn("unknown type", elog.String("name", cfg.CompressType))
+	//	}
+	//}
 	return ossClient, nil
 }
 

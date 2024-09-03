@@ -3,7 +3,7 @@ package eos
 import (
 	"strconv"
 
-	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 type HeadGetObjectOutputWrapper struct {
@@ -45,7 +45,7 @@ func (h *HeadGetObjectOutputWrapper) getContentDisposition() *string {
 	return h.headObjectOutput.ContentDisposition
 }
 
-func (h *HeadGetObjectOutputWrapper) metaData() map[string]*string {
+func (h *HeadGetObjectOutputWrapper) metaData() map[string]string {
 	if h.getObjectOutput != nil {
 		return h.getObjectOutput.Metadata
 	}
@@ -55,7 +55,7 @@ func (h *HeadGetObjectOutputWrapper) metaData() map[string]*string {
 func mergeHttpStandardHeaders(output *HeadGetObjectOutputWrapper) map[string]*string {
 	res := make(map[string]*string)
 	for k, v := range output.metaData() {
-		res[k] = v
+		res[k] = &v
 	}
 
 	res["Content-Length"] = output.getContentLength()

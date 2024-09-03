@@ -1,16 +1,18 @@
 package eos
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"go.uber.org/multierr"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"go.uber.org/multierr"
 )
 
 // LocalFile is the implementation based on local files.
@@ -51,7 +53,9 @@ func (l *LocalFile) GetBytes(ctx context.Context, key string, options ...GetOpti
 		return nil, err
 	}
 	defer rd.Close()
-	return io.ReadAll(rd)
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, rd)
+	return buf.Bytes(), err
 }
 
 // GetAsReader returns reader which you need to close it.
@@ -86,7 +90,7 @@ func (l *LocalFile) GetAndDecompressAsReader(ctx context.Context, key string) (i
 
 // Put override the file
 // It will create two files, one for content, one for meta.
-func (l *LocalFile) Put(ctx context.Context, key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error {
+func (l *LocalFile) Put(ctx context.Context, key string, reader io.Reader, meta map[string]string, options ...PutOptions) error {
 	filename := l.initDir(key)
 	l.l.Lock()
 	l.meta[key] = meta
@@ -100,7 +104,7 @@ func (l *LocalFile) Put(ctx context.Context, key string, reader io.ReadSeeker, m
 	return err
 }
 
-func (l *LocalFile) PutAndCompress(ctx context.Context, key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error {
+func (l *LocalFile) PutAndCompress(ctx context.Context, key string, reader io.Reader, meta map[string]string, options ...PutOptions) error {
 	return l.Put(ctx, key, reader, meta)
 }
 

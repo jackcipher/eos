@@ -19,10 +19,10 @@ import (
 var _ Client = (*OSS)(nil)
 
 type OSS struct {
-	Bucket     *oss.Bucket
-	Shards     map[string]*oss.Bucket
-	cfg        *BucketConfig
-	compressor Compressor
+	Bucket *oss.Bucket
+	Shards map[string]*oss.Bucket
+	cfg    *BucketConfig
+	//compressor Compressor
 }
 
 // 返回带prefix的key
@@ -233,7 +233,7 @@ func (ossClient *OSS) Range(ctx context.Context, key string, offset int64, lengt
 	return bucket.GetObject(key, opts...)
 }
 
-func (ossClient *OSS) Put(ctx context.Context, key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error {
+func (ossClient *OSS) Put(ctx context.Context, key string, reader io.Reader, meta map[string]string, options ...PutOptions) error {
 	bucket, key, err := ossClient.getBucket(ctx, key)
 	if err != nil {
 		return err
@@ -264,19 +264,19 @@ func (ossClient *OSS) Put(ctx context.Context, key string, reader io.ReadSeeker,
 		ossOptions = append(ossOptions, oss.Expires(*putOptions.expires))
 	}
 
-	if ossClient.compressor != nil {
-		l, err := GetReaderLength(reader)
-		if err != nil {
-			return err
-		}
-		if l > ossClient.cfg.CompressLimit {
-			reader, _, err = ossClient.compressor.Compress(reader)
-			if err != nil {
-				return err
-			}
-			ossOptions = append(ossOptions, oss.ContentEncoding(ossClient.compressor.ContentEncoding()))
-		}
-	}
+	//if ossClient.compressor != nil {
+	//	l, err := GetReaderLength(reader)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	if l > ossClient.cfg.CompressLimit {
+	//		reader, _, err = ossClient.compressor.Compress(reader)
+	//		if err != nil {
+	//			return err
+	//		}
+	//		ossOptions = append(ossOptions, oss.ContentEncoding(ossClient.compressor.ContentEncoding()))
+	//	}
+	//}
 	ossOptions = append(ossOptions, oss.WithContext(ctx))
 
 	return retry.Do(func() error {
@@ -284,14 +284,20 @@ func (ossClient *OSS) Put(ctx context.Context, key string, reader io.ReadSeeker,
 		if err != nil && reader != nil {
 			// Reset the body reader after the request since at this point it's already read
 			// Note that it's safe to ignore the error here since the 0,0 position is always valid
-			_, _ = reader.Seek(0, 0)
+			//_, _ = reader.Seek(0, 0)
 		}
 		return err
 	}, retry.Attempts(3), retry.Delay(1*time.Second))
 }
 
-func (ossClient *OSS) PutAndCompress(ctx context.Context, key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error {
-	data, err := ioutil.ReadAll(reader)
+func (ossClient *OSS) PutAndCompress(ctx context.Context, key string, reader io.Reader, meta map[string]string, options ...PutOptions) error {
+	//data, err := io.ReadAll(reader)
+	//if err != nil {
+	//	return err
+	//}
+
+	var buf bytes.Buffer
+	_, err := io.Copy(&buf, reader)
 	if err != nil {
 		return err
 	}
@@ -299,7 +305,7 @@ func (ossClient *OSS) PutAndCompress(ctx context.Context, key string, reader io.
 		meta = make(map[string]string)
 	}
 
-	encodedBytes := snappy.Encode(nil, data)
+	encodedBytes := snappy.Encode(nil, buf.Bytes())
 	meta["Compressor"] = "snappy"
 
 	return ossClient.Put(ctx, key, bytes.NewReader(encodedBytes), meta, options...)
