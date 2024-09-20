@@ -68,11 +68,11 @@ func (c *Component) Range(ctx context.Context, key string, offset int64, length 
 	return c.defaultClient.Range(ctx, key, offset, length)
 }
 
-func (c *Component) Put(ctx context.Context, key string, reader io.Reader, meta map[string]string, options ...PutOptions) error {
+func (c *Component) Put(ctx context.Context, key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error {
 	return c.defaultClient.Put(ctx, key, reader, meta, options...)
 }
 
-func (c *Component) PutAndCompress(ctx context.Context, key string, reader io.Reader, meta map[string]string, options ...PutOptions) error {
+func (c *Component) PutAndCompress(ctx context.Context, key string, reader io.ReadSeeker, meta map[string]string, options ...PutOptions) error {
 	return c.defaultClient.PutAndCompress(ctx, key, reader, meta, options...)
 }
 

@@ -66,5 +66,3 @@ CompressAndPut(ctx context.Context, key string, reader io.ReadSeeker, meta map[s
 Range(ctx context.Context, key string, offset int64, length int64) (io.ReadCloser, error)
 Exists(ctx context.Context, key string)(bool, error)
 ```
-
-https://aws.github.io/aws-sdk-go-v2/docs/migrating/
