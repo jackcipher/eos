@@ -194,7 +194,7 @@ func newHttpClient(name string, cfg *BucketConfig, logger *elog.Component) *http
 func createTransport(config *BucketConfig) *http.Transport {
 	dialer := &net.Dialer{
 		Timeout:   30 * time.Second,
-		KeepAlive: 30 * time.Second,
+		KeepAlive: 20 * time.Second,
 	}
 
 	return &http.Transport{
