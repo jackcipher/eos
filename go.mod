@@ -1,4 +1,4 @@
-module github.com/ego-component/eos
+module github.com/jackcipher/eos
 
 go 1.21
 
