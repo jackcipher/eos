@@ -84,6 +84,14 @@ func (a *S3) Copy(ctx context.Context, srcKey, dstKey string, options ...CopyOpt
 	return nil
 }
 
+func (a *S3) GetRawSrcKey(ctx context.Context, key string) (string, error) {
+	bucketName, fullKey, err := a.getBucketAndKey(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("/%s/%s", bucketName, fullKey), nil
+}
+
 func (a *S3) GetBucketName(ctx context.Context, key string) (string, error) {
 	bucketName, _, err := a.getBucketAndKey(ctx, key)
 	return bucketName, err

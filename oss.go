@@ -85,6 +85,14 @@ func (ossClient *OSS) Copy(ctx context.Context, srcKey, dstKey string, options .
 	return nil
 }
 
+func (ossClient *OSS) GetRawSrcKey(ctx context.Context, key string) (string, error) {
+	b, fullKey, err := ossClient.getBucket(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("/%s/%s", b.BucketName, fullKey), nil
+}
+
 func (ossClient *OSS) GetBucketName(ctx context.Context, key string) (string, error) {
 	b, _, err := ossClient.getBucket(ctx, key)
 	if err != nil {

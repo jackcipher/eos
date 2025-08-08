@@ -25,6 +25,7 @@ const PackageName = "component.eoss"
 
 // Client object storage client interface
 type Client interface {
+	GetRawSrcKey(ctx context.Context, key string) (string, error)
 	GetBucketName(ctx context.Context, key string) (string, error)
 	Get(ctx context.Context, key string, options ...GetOptions) (string, error)
 	GetBytes(ctx context.Context, key string, options ...GetOptions) ([]byte, error)

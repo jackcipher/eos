@@ -34,6 +34,10 @@ func (c *Component) Copy(ctx context.Context, srcKey, dstKey string, options ...
 	return c.defaultClient.Copy(ctx, srcKey, dstKey, options...)
 }
 
+func (c *Component) GetRawSrcKey(ctx context.Context, key string) (string, error) {
+	return c.defaultClient.GetRawSrcKey(ctx, key)
+}
+
 func (c *Component) GetBucketName(ctx context.Context, key string) (string, error) {
 	return c.defaultClient.GetBucketName(ctx, key)
 }

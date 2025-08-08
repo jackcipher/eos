@@ -33,6 +33,10 @@ func NewLocalFile(path string) (*LocalFile, error) {
 	}, err
 }
 
+func (l *LocalFile) GetRawSrcKey(ctx context.Context, key string) (string, error) {
+	panic("implement me")
+}
+
 func (l *LocalFile) GetBucketName(ctx context.Context, key string) (string, error) {
 	panic("implement me")
 }
